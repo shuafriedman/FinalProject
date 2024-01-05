@@ -1,0 +1,15 @@
+transformers==4.36.1
+accelerate==0.25.0
+datasets==2.16.1
+torch
+torchvision
+torchaudio
+evaluate
+jiwer
+librosa
+soundfile
+jupyterlab
+
+
+
+
