@@ -455,3 +455,13 @@ word2vec-kenlm/kenlm/util/stream/stream.hh
 word2vec-kenlm/kenlm/util/stream/typed_stream.hh
 word2vec-kenlm/5gram_correct.arpa
 word2vec-kenlm/5gram.arpa
+models/KenLM-Wav2Vec2-Hebrew/added_tokens.json
+models/KenLM-Wav2Vec2-Hebrew/alphabet.json
+models/KenLM-Wav2Vec2-Hebrew/preprocessor_config.json
+models/KenLM-Wav2Vec2-Hebrew/special_tokens_map.json
+models/KenLM-Wav2Vec2-Hebrew/tokenizer_config.json
+models/KenLM-Wav2Vec2-Hebrew/vocab.json
+models/KenLM-Wav2Vec2-Hebrew/language_model/5gram_correct.arpa
+models/KenLM-Wav2Vec2-Hebrew/language_model/attrs.json
+models/KenLM-Wav2Vec2-Hebrew/language_model/unigrams.txt
+word2vec-kenlm/batra_155.mp3
