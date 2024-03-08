@@ -465,3 +465,6 @@ models/KenLM-Wav2Vec2-Hebrew/language_model/5gram_correct.arpa
 models/KenLM-Wav2Vec2-Hebrew/language_model/attrs.json
 models/KenLM-Wav2Vec2-Hebrew/language_model/unigrams.txt
 word2vec-kenlm/batra_155.mp3
+word2vec-kenlm/data/recordings/batra_155.mp3
+word2vec-kenlm/data/recordings/bavametzia_2.mp3
+word2vec-kenlm/data/recordings/bavametzia4.mp3
