@@ -468,3 +468,5 @@ word2vec-kenlm/batra_155.mp3
 word2vec-kenlm/data/recordings/batra_155.mp3
 word2vec-kenlm/data/recordings/bavametzia_2.mp3
 word2vec-kenlm/data/recordings/bavametzia4.mp3
+wav2vec-kenlm/data/mesivta/5gram_correct.arpa
+wav2vec-kenlm/data/mesivta/5gram.arpa
