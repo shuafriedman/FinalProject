@@ -1,0 +1,6 @@
+datasets
+transformers
+torch
+jiwer
+accelerate
+nvidia-smi
