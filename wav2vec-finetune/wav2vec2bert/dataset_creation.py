@@ -1,7 +1,8 @@
 import re
 from config import *
 from datasets import load_dataset, dataset_dict, concatenate_datasets
-
+import json
+from pathlib import Path
 chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\']'
 
 
@@ -42,6 +43,10 @@ def standardize_dataset(dataset):
     dataset= dataset.map(remove_special_characters)
     return dataset
 def main():
+    #check if MODEL_FOLDER_NAME exists, wher current file is being invoke
+    if not Path(MODEL_FOLDER_PATH).exists():
+        Path(MODEL_FOLDER_PATH).mkdir(parents=True, exist_ok=True)
+    
     datasets = []
     for dataset_config in DATASETS:
         print("Loading dataset: ", dataset_config['name'])
@@ -71,9 +76,17 @@ def main():
         dataset['train']= concatenate_datasets(dataset['train'])
         dataset['test']= concatenate_datasets(dataset['test'])
         vocab = get_train_test_vocab(dataset)
-    print("Getting Vocab")
-    vocab = get_vocab(dataset)
-
+    else:
+        print("Getting Vocab")
+        vocab = get_vocab(dataset)
+    vocab["|"]= vocab[" "]
+    del vocab[" "]
+    vocab["[UNK]"]= len(vocab)
+    vocab["[PAD]"]= len(vocab)
+    with open(f"{MODEL_FOLDER_PATH}/vocab.json", "w") as f:
+        json.dump(vocab, f)
+    
+    dataset.save_to_disk(f"{DATA_FOLDER_PATH}/fleurs")
     # dataset = load_dataset("google/fleurs", "he_il", split="test")
     # kan_fleurs= kan_fleurs.map(remove_special_characters)
     

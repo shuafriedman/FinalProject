@@ -7,3 +7,5 @@ fleurs_config = {
 TRAIN_AND_TEST = True
 DATASETS = [fleurs_config]
 FROM_HUB = True
+MODEL_FOLDER_PATH = "models/wav2vec2BertLm"
+DATA_FOLDER_PATH = "datasets"
