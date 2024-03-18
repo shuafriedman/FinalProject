@@ -6,7 +6,8 @@ import pathlib
 import subprocess
 from transformers import Wav2Vec2CTCTokenizer
 from transformers import SeamlessM4TFeatureExtractor
-from transformers import Wav2Vec2BertProcessor
+from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC
+from transformers import Trainer, TrainingArguments
 #import load_metric
 from datasets import load_metric
 from config import *
@@ -39,10 +40,9 @@ class DataCollatorCTCWithPadding:
         )
         # replace padding with -100 to ignore loss correctly
         labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
-
         batch["labels"] = labels
-
         return batch
+    
 def compute_metrics_custom(wer_metric, processor):
     def compute_metric(pred, ):
         pred_logits = pred.predictions
@@ -60,8 +60,10 @@ def compute_metrics_custom(wer_metric, processor):
     return compute_metric
 
 def load_dataset():
-    dataset = datasets.load_dataset("fleurs", "he_il", split="test")
-    return dataset
+    dataset = datasets.load_dataset(DATA_FOLDER_PATH)
+    #if dataset has train and test
+    return
+
 def prepare_dataset(batch, processor):
     audio = batch["audio"]
     batch["input_features"] = processor(audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
@@ -71,7 +73,6 @@ def prepare_dataset(batch, processor):
     return batch
 
 def main():
-
     tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(MODEL_FOLDER_PATH, \
         unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|")
 
@@ -87,6 +88,8 @@ def main():
     
     data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
     wer_metric = load_metric("wer")
+    compute_metric= compute_metrics_custom(wer_metric, processor)
+    
     model = Wav2Vec2BertForCTC.from_pretrained(
         "facebook/w2v-bert-2.0",
         attention_dropout=0.0,
@@ -99,34 +102,38 @@ def main():
         pad_token_id=processor.tokenizer.pad_token_id,
         vocab_size=len(processor.tokenizer),
     )
-    from transformers import TrainingArguments
 
-training_args = TrainingArguments(
-  output_dir=repo_name,
-  group_by_length=True,
-  per_device_train_batch_size=16,
-  gradient_accumulation_steps=2,
-  evaluation_strategy="steps",
-  num_train_epochs=10,
-  gradient_checkpointing=True,
-  fp16=True,
-  save_steps=600,
-  eval_steps=300,
-  logging_steps=300,
-  learning_rate=5e-5,
-  warmup_steps=500,
-  save_total_limit=2,
-  push_to_hub=True,
-)
-trainer = Trainer(
-    model=model,
-    data_collator=data_collator,
-    args=training_args,
-    compute_metrics=compute_metrics_custom(processor=processor, wer_metric=wer_metric),
-    train_dataset=common_voice_train,
-    eval_dataset=common_voice_test,
-    tokenizer=processor.feature_extractor,
-)
+    training_args = TrainingArguments(
+        output_dir= './',
+        group_by_length=True,
+        per_device_train_batch_size=16,
+        gradient_accumulation_steps=2,
+        evaluation_strategy="steps",
+        num_train_epochs=10,
+        gradient_checkpointing=True,
+        fp16=True,
+        save_steps=600,
+        eval_steps=300,
+        logging_steps=300,
+        learning_rate=5e-5,
+        warmup_steps=500,
+        save_total_limit=2,
+        push_to_hub=False,
+    )
+    
+    trainer = Trainer(
+        model=model,
+        data_collator=data_collator,
+        args=training_args,
+        compute_metrics=compute_metric,
+        train_dataset= dataset["train"],
+        eval_dataset=[dataset["test"]],
+        tokenizer=processor.feature_extractor,
+    )
+    
+    trainer.train()
+    
+    trainer.save_model(MODEL_FOLDER_PATH)
 if __name__=='__main__':
    main()
 
