@@ -1,25 +1,17 @@
 import re
 from config import *
-from datasets import load_dataset, dataset_dict, concatenate_datasets
+from datasets import load_dataset, concatenate_datasets, DatasetDict
 import json
 from pathlib import Path
 chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\']'
-
 
 
 def extract_all_chars(batch):
   all_text = " ".join(batch["transcription"])
   vocab = list(set(all_text))
   return {"vocab": [vocab], "all_text": [all_text]}
-
-def get_vocab(dataset):
-        vocab = dataset.map(extract_all_chars, batched=True, batch_size=-1, \
-                        keep_in_memory=True, remove_columns=dataset.column_names)
-        vocab_list = list(set(vocab["vocab"][0]))
-        vocab_dict = {v: k for k, v in enumerate(sorted(vocab_list))}
-        return vocab_dict
     
-def get_train_test_vocab(dataset):
+def get_vocab(dataset):
     vocabs = {}
     for split, data in dataset.items():
         vocabs[split]=data.map(extract_all_chars, batched=True, batch_size=-1, \
@@ -32,16 +24,19 @@ def remove_special_characters(batch):
     batch["transcription"] = re.sub(chars_to_remove_regex, '', batch["transcription"]).lower()
     return batch
 
-def standardize_dataset(dataset):
+def standardize_dataset(dataset, dataset_name):
+    print("Removing unecessary columns")
     dataset= dataset.remove_columns([col for col in dataset.features if col \
                                 not in ["sentence", "transcription", "audio"]])
     try:
         dataset= dataset.rename_column("sentence", "transcription")
     except:
         pass
-    dataset= dataset.map(lambda x: {'dataset': dataset})
+    print("writing name of dataset to dataset column")
+    dataset= dataset.map(lambda x: {'dataset': dataset_name})
     dataset= dataset.map(remove_special_characters)
     return dataset
+
 def main():
     #check if MODEL_FOLDER_NAME exists, wher current file is being invoke
     if not Path(MODEL_FOLDER_PATH).exists():
@@ -60,14 +55,16 @@ def main():
         if TRAIN_AND_TEST:
             print("Standardizing train and test splits")
             for name, data in dataset.items():
-               dataset[name] = standardize_dataset(data)
+               dataset[name] = standardize_dataset(data, dataset_config["name"])
         else:
             print("Standardizing test split")
-            dataset = standardize_dataset(dataset)
-            dataset['test'] = dataset[dataset_config['test_split']]
+            dataset = standardize_dataset(dataset, dataset_config["name"])
+            dataset = dataset.train_test_split(test_size=0.2)
+
         datasets.append(dataset)
-        
-    if TRAIN_AND_TEST:
+
+    if len(datasets) > 1:
+        print("Concatenating datasets")    
         dataset = {'train': [], 'test':[]}
         for data in datasets:
             dataset['train'].append(data['train'])
@@ -75,10 +72,12 @@ def main():
         print("Concatenating datasets")
         dataset['train']= concatenate_datasets(dataset['train'])
         dataset['test']= concatenate_datasets(dataset['test'])
-        vocab = get_train_test_vocab(dataset)
-    else:
-        print("Getting Vocab")
-        vocab = get_vocab(dataset)
+        dataset = DatasetDict({
+            'train': dataset['train'],
+            'test': dataset['test']
+        })
+
+    vocab = get_vocab(dataset)
     vocab["|"]= vocab[" "]
     del vocab[" "]
     vocab["[UNK]"]= len(vocab)

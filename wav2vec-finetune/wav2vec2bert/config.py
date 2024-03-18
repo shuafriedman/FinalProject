@@ -4,7 +4,7 @@ fleurs_config = {
     'language': 'he_il',
     'test_split': 'test'
 }
-TRAIN_AND_TEST = True
+TRAIN_AND_TEST = False
 DATASETS = [fleurs_config]
 FROM_HUB = True
 MODEL_FOLDER_PATH = "models/wav2vec2BertLm"
