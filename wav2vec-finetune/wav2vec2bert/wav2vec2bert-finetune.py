@@ -9,7 +9,7 @@ from transformers import SeamlessM4TFeatureExtractor
 from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC
 from transformers import Trainer, TrainingArguments
 #import load_metric
-from datasets import load_metric
+from datasets import load_metric, DatasetDict
 from config import *
 import torch
 import numpy as np
@@ -59,37 +59,42 @@ def compute_metrics_custom(wer_metric, processor):
         return {"wer": wer}
     return compute_metric
 
-def load_dataset():
-    dataset = datasets.load_dataset(DATA_FOLDER_PATH)
-    #if dataset has train and test
-    return
+def load_dataset_from_disk():
+    dataset = datasets.load_from_disk(f"{DATA_FOLDER_PATH}/fleurs")
+    if DRY_RUN:
+        small_train_subset = dataset['train'].select(range(32))
+        small_test_subset = dataset['test'].select(range(32)) 
+        small_dataset_split = DatasetDict({"train": small_train_subset, "test": small_test_subset})
+    return small_dataset_split
 
 def prepare_dataset(batch, processor):
     audio = batch["audio"]
     batch["input_features"] = processor(audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
     batch["input_length"] = len(batch["input_features"])
 
-    batch["labels"] = processor(text=batch["sentence"]).input_ids
+    batch["labels"] = processor(text=batch["transcription"]).input_ids
     return batch
 
 def main():
+    print("Loading tokenizer")
     tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(MODEL_FOLDER_PATH, \
         unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|")
-
+    print("Loading Feature Extractor")
     feature_extractor = SeamlessM4TFeatureExtractor(feature_size=80, \
         num_mel_bins=80, sampling_rate=16000, padding_value=0.0)
-
+    print("Loading Processor")
     processor = Wav2Vec2BertProcessor(feature_extractor=feature_extractor, \
         tokenizer=tokenizer)
-    
-    dataset = load_dataset()
+    print("Loading Dataset")
+    dataset = load_dataset_from_disk()
+    print("Mapping Dataset Processor to Dataset")
     dataset = dataset.map(prepare_dataset, remove_columns=dataset["train"].features.keys(), \
                         fn_kwargs={"processor": processor})
     
     data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
     wer_metric = load_metric("wer")
     compute_metric= compute_metrics_custom(wer_metric, processor)
-    
+    print("Defining Model and Arguements")
     model = Wav2Vec2BertForCTC.from_pretrained(
         "facebook/w2v-bert-2.0",
         attention_dropout=0.0,
@@ -106,14 +111,14 @@ def main():
     training_args = TrainingArguments(
         output_dir= './',
         group_by_length=True,
-        per_device_train_batch_size=16,
-        gradient_accumulation_steps=2,
+        per_device_train_batch_size=8,
+        gradient_accumulation_steps=3,
         evaluation_strategy="steps",
-        num_train_epochs=10,
+        num_train_epochs=10 if not DRY_RUN else 2,
         gradient_checkpointing=True,
-        fp16=True,
+        fp16=True if torch.cuda.is_available() else False,
         save_steps=600,
-        eval_steps=300,
+        eval_steps=300 if not DRY_RUN else 8,
         logging_steps=300,
         learning_rate=5e-5,
         warmup_steps=500,
@@ -130,9 +135,9 @@ def main():
         eval_dataset=[dataset["test"]],
         tokenizer=processor.feature_extractor,
     )
-    
+    print("Beginning Training")
     trainer.train()
-    
+    print("Saving Model")
     trainer.save_model(MODEL_FOLDER_PATH)
 if __name__=='__main__':
    main()

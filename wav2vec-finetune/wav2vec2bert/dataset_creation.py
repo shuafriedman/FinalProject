@@ -3,8 +3,21 @@ from config import *
 from datasets import load_dataset, concatenate_datasets, DatasetDict
 import json
 from pathlib import Path
+import string
 chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\']'
-
+# hebrew_letters = [
+#     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט',
+#     'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ',
+#     'ק', 'ר', 'ש', 'ת'
+# ]
+# Using enumerate to pair each letter with an index, starting with 1
+def drop_english_samples(dataset):
+    def contains_english_or_digits(text):
+        english_letters = set(string.ascii_lowercase)
+        digits = set(string.digits)
+        return any(char in english_letters or char in digits for char in text.lower())
+    filtered_dataset = dataset.filter(lambda example: not contains_english_or_digits(example['transcription']))
+    return filtered_dataset
 
 def extract_all_chars(batch):
   all_text = " ".join(batch["transcription"])
@@ -45,7 +58,7 @@ def main():
     datasets = []
     for dataset_config in DATASETS:
         print("Loading dataset: ", dataset_config['name'])
-        path = dataset_config['name'] if FROM_HUB else dataset_config['local_path']
+        path = dataset_config['name']
         split = None if TRAIN_AND_TEST else dataset_config['test_split'] #none grabs both train and test
         dataset = load_dataset(path=path,
                                 name=dataset_config['language'],
@@ -76,7 +89,9 @@ def main():
             'train': dataset['train'],
             'test': dataset['test']
         })
-
+    if KEEP_HEBREW_ONLY:
+        for name in dataset:
+            dataset[name] = drop_english_samples(dataset[name])
     vocab = get_vocab(dataset)
     vocab["|"]= vocab[" "]
     del vocab[" "]

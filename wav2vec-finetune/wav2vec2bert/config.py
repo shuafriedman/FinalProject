@@ -6,6 +6,8 @@ fleurs_config = {
 }
 TRAIN_AND_TEST = False
 DATASETS = [fleurs_config]
-FROM_HUB = True
+KEEP_HEBREW_ONLY=True
+FROM_HUB = False
 MODEL_FOLDER_PATH = "models/wav2vec2BertLm"
 DATA_FOLDER_PATH = "datasets"
+DRY_RUN=True
