@@ -4,7 +4,11 @@ from datasets import load_dataset, concatenate_datasets, DatasetDict
 import json
 from pathlib import Path
 import string
-chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\']'
+from transformers import Wav2Vec2BertForCTC
+from transformers import Wav2Vec2CTCTokenizer
+from transformers import SeamlessM4TFeatureExtractor
+from transformers import Wav2Vec2BertProcessor
+chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\'\]\[\{\}\־]'
 # hebrew_letters = [
 #     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט',
 #     'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ',
@@ -51,10 +55,12 @@ def standardize_dataset(dataset, dataset_name):
     return dataset
 
 def main():
-    #check if MODEL_FOLDER_NAME exists, wher current file is being invoke
-    if not Path(MODEL_FOLDER_PATH).exists():
-        Path(MODEL_FOLDER_PATH).mkdir(parents=True, exist_ok=True)
-    
+    # check if MODEL_FOLDER_NAME exists, wher current file is being invoke
+    if not Path(LOCAL_MODEL_PATH).exists():
+        Path(LOCAL_MODEL_PATH).mkdir(parents=True, exist_ok=True)
+    if not Path(FINETUNED_MODEL_PATH).exists():
+        Path(FINETUNED_MODEL_PATH).mkdir(parents=True, exist_ok=True)
+
     datasets = []
     for dataset_config in DATASETS:
         print("Loading dataset: ", dataset_config['name'])
@@ -97,10 +103,24 @@ def main():
     del vocab[" "]
     vocab["[UNK]"]= len(vocab)
     vocab["[PAD]"]= len(vocab)
-    with open(f"{MODEL_FOLDER_PATH}/vocab.json", "w") as f:
+    print("printing vocab with length: ", len(vocab))
+    with open(f"{FINETUNED_MODEL_PATH}/vocab.json", "w") as f:
         json.dump(vocab, f)
-    
+    tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(FINETUNED_MODEL_PATH,
+                unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|")
+    print("Saving dataset to disk")
     dataset.save_to_disk(f"{DATA_FOLDER_PATH}/fleurs")
+    print("Downloading Base Model locally")
+    if DOWNLOAD_MODEL_LOCALLY:
+        print("downloading model")
+        print("download feature extractor")
+        feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(BASE_MODEL_NAME)
+        processor=Wav2Vec2BertProcessor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+        model = Wav2Vec2BertForCTC.from_pretrained(BASE_MODEL_NAME, vocab_size=len(processor.tokenizer))
+        print("download tokenizer")
+        print("saving locally")
+        model.save_pretrained(LOCAL_MODEL_PATH)
+        processor.save_pretrained(LOCAL_MODEL_PATH)
     # dataset = load_dataset("google/fleurs", "he_il", split="test")
     # kan_fleurs= kan_fleurs.map(remove_special_characters)
     

@@ -6,7 +6,7 @@ import pathlib
 import subprocess
 from transformers import Wav2Vec2CTCTokenizer
 from transformers import SeamlessM4TFeatureExtractor
-from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC
+from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC, AutoProcessor
 from transformers import Trainer, TrainingArguments
 #import load_metric
 from datasets import load_metric, DatasetDict
@@ -77,14 +77,8 @@ def prepare_dataset(batch, processor):
 
 def main():
     print("Loading tokenizer")
-    tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(MODEL_FOLDER_PATH, \
-        unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|")
-    print("Loading Feature Extractor")
-    feature_extractor = SeamlessM4TFeatureExtractor(feature_size=80, \
-        num_mel_bins=80, sampling_rate=16000, padding_value=0.0)
     print("Loading Processor")
-    processor = Wav2Vec2BertProcessor(feature_extractor=feature_extractor, \
-        tokenizer=tokenizer)
+    processor = Wav2Vec2BertProcessor.from_pretrained(LOCAL_MODEL_PATH if DOWNLOAD_MODEL_LOCALLY else None) #TODO
     print("Loading Dataset")
     dataset = load_dataset_from_disk()
     print("Mapping Dataset Processor to Dataset")
@@ -95,8 +89,9 @@ def main():
     wer_metric = load_metric("wer")
     compute_metric= compute_metrics_custom(wer_metric, processor)
     print("Defining Model and Arguements")
+    path = LOCAL_MODEL_PATH if DOWNLOAD_MODEL_LOCALLY else BASE_MODEL_NAME
     model = Wav2Vec2BertForCTC.from_pretrained(
-        "facebook/w2v-bert-2.0",
+        path,
         attention_dropout=0.0,
         hidden_dropout=0.0,
         feat_proj_dropout=0.0,
@@ -105,18 +100,20 @@ def main():
         ctc_loss_reduction="mean",
         add_adapter=True,
         pad_token_id=processor.tokenizer.pad_token_id,
-        vocab_size=len(processor.tokenizer),
+        vocab_size=len(processor.tokenizer)
     )
-
+    print("Checking for cuda")
+    fp16= True if torch.cuda.is_available() else False
+    print("Getting Training Args")
     training_args = TrainingArguments(
         output_dir= './',
         group_by_length=True,
-        per_device_train_batch_size=8,
-        gradient_accumulation_steps=3,
+        per_device_train_batch_size= 32 if not DRY_RUN else 1,
+        gradient_accumulation_steps=2 if not DRY_RUN else 5,
         evaluation_strategy="steps",
-        num_train_epochs=10 if not DRY_RUN else 2,
+        num_train_epochs=10 if not DRY_RUN else 1,
         gradient_checkpointing=True,
-        fp16=True if torch.cuda.is_available() else False,
+        fp16=fp16,
         save_steps=600,
         eval_steps=300 if not DRY_RUN else 8,
         logging_steps=300,
@@ -125,20 +122,20 @@ def main():
         save_total_limit=2,
         push_to_hub=False,
     )
-    
+    print("Setting Trainer")
     trainer = Trainer(
         model=model,
         data_collator=data_collator,
         args=training_args,
         compute_metrics=compute_metric,
         train_dataset= dataset["train"],
-        eval_dataset=[dataset["test"]],
+        eval_dataset=dataset["test"],
         tokenizer=processor.feature_extractor,
     )
     print("Beginning Training")
     trainer.train()
     print("Saving Model")
-    trainer.save_model(MODEL_FOLDER_PATH)
+    trainer.save_model(FINETUNED_MODEL_PATH)
 if __name__=='__main__':
    main()
 
