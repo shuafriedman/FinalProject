@@ -103,6 +103,8 @@ def main():
     del vocab[" "]
     vocab["[UNK]"]= len(vocab)
     vocab["[PAD]"]= len(vocab)
+    vocab["<s>"] = len(vocab)
+    vocab["</s>"]=len(vocab)
     print("printing vocab with length: ", len(vocab))
     with open(f"{FINETUNED_MODEL_PATH}/vocab.json", "w") as f:
         json.dump(vocab, f)
