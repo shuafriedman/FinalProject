@@ -1,6 +1,6 @@
 import re
 from config import *
-from datasets import load_dataset, concatenate_datasets, DatasetDict
+from datasets import load_dataset, load_from_disk, concatenate_datasets, DatasetDict
 import json
 from pathlib import Path
 import string
@@ -44,9 +44,13 @@ def remove_special_characters(batch):
 def standardize_dataset(dataset, dataset_name):
     print("Removing unecessary columns")
     dataset= dataset.remove_columns([col for col in dataset.features if col \
-                                not in ["sentence", "transcription", "audio"]])
+                                not in ["sentence", "transcription", "text", "audio"]])
     try:
         dataset= dataset.rename_column("sentence", "transcription")
+    except:
+        pass
+    try:
+        dataset = dataset.rename_column("text", "transcription")
     except:
         pass
     print("writing name of dataset to dataset column")
@@ -66,10 +70,16 @@ def main():
         print("Loading dataset: ", dataset_config['name'])
         path = dataset_config['name']
         split = None if TRAIN_AND_TEST else dataset_config['test_split'] #none grabs both train and test
-        dataset = load_dataset(path=path,
-                                name=dataset_config['language'],
-                                split=split,              
-        )
+        if LOAD_DATASET_FROM_LOCAL:
+            dataset = load_from_disk(
+                dataset_config['local_path']
+                )
+        else:
+            dataset = load_dataset(
+                path=path,
+                name=dataset_config['language'],
+                split=split             
+            )
         print("Standardizing dataset: ", dataset_config['name'])
         if TRAIN_AND_TEST:
             print("Standardizing train and test splits")
@@ -111,7 +121,7 @@ def main():
     tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(FINETUNED_MODEL_PATH,
                 unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|")
     print("Saving dataset to disk")
-    dataset.save_to_disk(f"{DATA_FOLDER_PATH}/fleurs")
+    dataset.save_to_disk(f"{DATA_FOLDER_PATH}/{dataset_config['local_path']}")
     print("Downloading Base Model locally")
     if DOWNLOAD_MODEL_LOCALLY:
         print("downloading model")
