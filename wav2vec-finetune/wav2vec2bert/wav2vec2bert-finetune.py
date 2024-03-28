@@ -64,8 +64,8 @@ def load_dataset_from_disk():
     if DRY_RUN:
         small_train_subset = dataset['train'].select(range(32))
         small_test_subset = dataset['test'].select(range(32)) 
-        small_dataset_split = DatasetDict({"train": small_train_subset, "test": small_test_subset})
-    return small_dataset_split
+        dataset = DatasetDict({"train": small_train_subset, "test": small_test_subset})
+    return dataset
 
 def prepare_dataset(batch, processor):
     audio = batch["audio"]
@@ -108,10 +108,10 @@ def main():
     training_args = TrainingArguments(
         output_dir= './',
         group_by_length=True,
-        per_device_train_batch_size= 32 if not DRY_RUN else 1,
+        per_device_train_batch_size= 16 if not DRY_RUN else 1,
         gradient_accumulation_steps=2 if not DRY_RUN else 5,
         evaluation_strategy="steps",
-        num_train_epochs=10 if not DRY_RUN else 1,
+        num_train_epochs=1 if not DRY_RUN else 1,
         gradient_checkpointing=True,
         fp16=fp16,
         save_steps=600,
