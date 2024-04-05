@@ -10,15 +10,17 @@ ivritai_config = {
     'language': None,
     'test_split': 'test'
 }
-
+LOAD_DATASET_FROM_LOCAL=False
+DOWNLOAD_MODEL_LOCALLY=True
+FILTER_LONG_SAMPLES = True
+FILTER_THRESHOLD = 30
+SUBSAMPLE_RATIO=1.0
 BASE_MODEL_NAME= "facebook/w2v-bert-2.0"
 TRAIN_AND_TEST = True
 DATASETS = [ivritai_config]
 KEEP_HEBREW_ONLY=True
 FROM_HUB = False
-FINETUNED_MODEL_PATH = f"models/{BASE_MODEL_NAME}-finetuned"
 DATA_FOLDER_PATH = "datasets"
-LOAD_DATASET_FROM_LOCAL=True
-DOWNLOAD_MODEL_LOCALLY=True
 LOCAL_MODEL_PATH=f"models/{BASE_MODEL_NAME}"
+FINETUNED_MODEL_PATH = f"models/{BASE_MODEL_NAME}-finetuned"
 DRY_RUN=False

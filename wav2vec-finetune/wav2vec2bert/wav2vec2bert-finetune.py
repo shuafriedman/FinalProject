@@ -9,7 +9,7 @@ from transformers import SeamlessM4TFeatureExtractor
 from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC, AutoProcessor
 from transformers import Trainer, TrainingArguments
 #import load_metric
-from datasets import load_metric, DatasetDict
+from datasets import load_metric, DatasetDict, load_from_disk
 from config import *
 import torch
 import numpy as np
@@ -60,20 +60,14 @@ def compute_metrics_custom(wer_metric, processor):
     return compute_metric
 
 def load_dataset_from_disk():
-    dataset = datasets.load_from_disk(f"{DATA_FOLDER_PATH}/fleurs")
+    dataset_name = DATASETS[0]['local_path']
+    suffix = "-filtered" if FILTER_LONG_SAMPLES else None
+    dataset= load_from_disk(f"{DATA_FOLDER_PATH}/{dataset_name}{suffix}")
     if DRY_RUN:
         small_train_subset = dataset['train'].select(range(32))
         small_test_subset = dataset['test'].select(range(32)) 
         dataset = DatasetDict({"train": small_train_subset, "test": small_test_subset})
     return dataset
-
-def prepare_dataset(batch, processor):
-    audio = batch["audio"]
-    batch["input_features"] = processor(audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
-    batch["input_length"] = len(batch["input_features"])
-
-    batch["labels"] = processor(text=batch["transcription"]).input_ids
-    return batch
 
 def main():
     print("Loading tokenizer")
@@ -82,8 +76,7 @@ def main():
     print("Loading Dataset")
     dataset = load_dataset_from_disk()
     print("Mapping Dataset Processor to Dataset")
-    dataset = dataset.map(prepare_dataset, remove_columns=dataset["train"].features.keys(), \
-                        fn_kwargs={"processor": processor})
+
     
     data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
     wer_metric = load_metric("wer")
@@ -108,8 +101,8 @@ def main():
     training_args = TrainingArguments(
         output_dir= './',
         group_by_length=True,
-        per_device_train_batch_size= 16 if not DRY_RUN else 1,
-        gradient_accumulation_steps=2 if not DRY_RUN else 5,
+        per_device_train_batch_size= 4 if not DRY_RUN else 1,
+        gradient_accumulation_steps=8 if not DRY_RUN else 2,
         evaluation_strategy="steps",
         num_train_epochs=1 if not DRY_RUN else 1,
         gradient_checkpointing=True,

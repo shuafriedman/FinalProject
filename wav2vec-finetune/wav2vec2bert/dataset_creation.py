@@ -1,6 +1,6 @@
 import re
 from config import *
-from datasets import load_dataset, load_from_disk, concatenate_datasets, DatasetDict
+from datasets import load_dataset, load_from_disk, concatenate_datasets, DatasetDict, Audio
 import json
 from pathlib import Path
 import string
@@ -15,6 +15,24 @@ chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\'\]\[\{\}\־]'
 #     'ק', 'ר', 'ש', 'ת'
 # ]
 # Using enumerate to pair each letter with an index, starting with 1
+def prepare_dataset(batch, processor):
+    audio = batch["audio"]
+    batch["input_features"] = processor(audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
+    batch["input_length"] = len(batch["input_features"])
+    batch["labels"] = processor(text=batch["transcription"]).input_ids
+    return batch
+
+def filter_long_samples(dataset):
+    def is_shorter_than_max_duration(example):
+        duration_seconds = len(example['array']) / example['sampling_rate']
+        return duration_seconds <= FILTER_THRESHOLD
+    filtered_dataset=dataset.filter(lambda example: is_shorter_than_max_duration(example['audio']))
+    return filtered_dataset
+
+def subsample_dataset(dataset):
+    assert 0 < SUBSAMPLE_RATIO <= 1, "Subsample ratio must be between 0 and 1."
+    return dataset.shuffle(seed=42).select(range(int(len(dataset) * SUBSAMPLE_RATIO)))
+
 def drop_english_samples(dataset):
     def contains_english_or_digits(text):
         english_letters = set(string.ascii_lowercase)
@@ -89,7 +107,7 @@ def main():
             print("Standardizing test split")
             dataset = standardize_dataset(dataset, dataset_config["name"])
             dataset = dataset.train_test_split(test_size=0.2)
-
+        
         datasets.append(dataset)
 
     if len(datasets) > 1:
@@ -105,9 +123,20 @@ def main():
             'train': dataset['train'],
             'test': dataset['test']
         })
+    if SUBSAMPLE_RATIO < 1.0:
+        for name in dataset.keys():
+            dataset[name] = subsample_dataset(dataset[name])
+    if FILTER_LONG_SAMPLES:
+        for name in dataset:
+            dataset[name] = filter_long_samples(dataset[name])
     if KEEP_HEBREW_ONLY:
         for name in dataset:
             dataset[name] = drop_english_samples(dataset[name])
+            
+    print("Casting Audio")
+    dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
+
+    print("Getting Vocab")
     vocab = get_vocab(dataset)
     vocab["|"]= vocab[" "]
     del vocab[" "]
@@ -120,14 +149,20 @@ def main():
         json.dump(vocab, f)
     tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(FINETUNED_MODEL_PATH,
                 unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|")
+    feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(BASE_MODEL_NAME)
+    processor=Wav2Vec2BertProcessor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+
+    dataset = dataset.map(prepare_dataset, remove_columns=dataset["train"].features.keys(), \
+                        fn_kwargs={"processor": processor})
+                        
     print("Saving dataset to disk")
-    dataset.save_to_disk(f"{DATA_FOLDER_PATH}/{dataset_config['local_path']}")
+    suffix = "-filtered" if FILTER_LONG_SAMPLES else None
+    dataset.save_to_disk(f"{DATA_FOLDER_PATH}/{dataset_config['local_path']}{suffix}")
     print("Downloading Base Model locally")
     if DOWNLOAD_MODEL_LOCALLY:
         print("downloading model")
         print("download feature extractor")
-        feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(BASE_MODEL_NAME)
-        processor=Wav2Vec2BertProcessor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+
         model = Wav2Vec2BertForCTC.from_pretrained(BASE_MODEL_NAME, vocab_size=len(processor.tokenizer))
         print("download tokenizer")
         print("saving locally")
