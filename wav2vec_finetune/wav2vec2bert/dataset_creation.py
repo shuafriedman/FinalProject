@@ -4,7 +4,7 @@ from datasets import load_dataset, load_from_disk, concatenate_datasets, Dataset
 import json
 from pathlib import Path
 import string
-from transformers import Wav2Vec2BertForCTC
+from transformers import Wav2Vec2BertForCTC, Wav2Vec2FeatureExtractor, Wav2Vec2Processor
 from transformers import Wav2Vec2CTCTokenizer
 from transformers import SeamlessM4TFeatureExtractor
 from transformers import Wav2Vec2BertProcessor
@@ -15,10 +15,10 @@ chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\'\]\[\{\}\־]'
 #     'ק', 'ר', 'ש', 'ת'
 # ]
 # Using enumerate to pair each letter with an index, starting with 1
-def prepare_dataset(batch, processor):
+def prepare_dataset(batch, processor, input_key="input_features"):
     audio = batch["audio"]
-    batch["input_features"] = processor(audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
-    batch["input_length"] = len(batch["input_features"])
+    if input_key=="input_features":
+        batch["input_features"] = processor(audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
     batch["labels"] = processor(text=batch["transcription"]).input_ids
     return batch
 
@@ -149,15 +149,25 @@ def main():
         json.dump(vocab, f)
     tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(FINETUNED_MODEL_PATH,
                 unk_token="[UNK]", pad_token="[PAD]", word_delimiter_token="|")
-    feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(BASE_MODEL_NAME)
-    processor=Wav2Vec2BertProcessor(feature_extractor=feature_extractor, tokenizer=tokenizer)
 
-    dataset = dataset.map(prepare_dataset, remove_columns=dataset["train"].features.keys(), \
-                        fn_kwargs={"processor": processor})
+    if BASE_MODEL_NAME=="facebook/w2v-bert-2.0":
+        input_key="input_features"
+        feature_extractor = SeamlessM4TFeatureExtractor.from_pretrained(BASE_MODEL_NAME)
+        processor=Wav2Vec2BertProcessor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+    else:
+        input_key="input_features"
+        feature_extractor = Wav2Vec2FeatureExtractor(feature_size=1, sampling_rate=16000, 
+                padding_value=0.0, do_normalize=True, return_attention_mask=True)
+        processor=Wav2Vec2Proessor(feature_extractor=feature_extractor, tokenizer=tokenizer)
+
+    if PERFORM_PREPROCESSING_ON_DATASET_CREATION:
+        dataset = dataset.map(prepare_dataset, remove_columns=dataset["train"].features.keys(), \
+                            fn_kwargs={"processor": processor, "input_key": input_key})
                         
     print("Saving dataset to disk")
-    suffix = "-filtered" if FILTER_LONG_SAMPLES else None
-    dataset.save_to_disk(f"{DATA_FOLDER_PATH}/{dataset_config['local_path']}{suffix}")
+    filtered_suffix = "-filtered" if FILTER_LONG_SAMPLES else None
+    preprocessing_suffix="-proc" if PERFORM_PREPROCESSING_ON_DATASET_CREATION else None
+    dataset.save_to_disk(f"{DATA_FOLDER_PATH}/{dataset_config['local_path']}{filtered_suffix}{preprocessing_suffix}")
     print("Downloading Base Model locally")
     if DOWNLOAD_MODEL_LOCALLY:
         print("downloading model")
@@ -168,6 +178,7 @@ def main():
         print("saving locally")
         model.save_pretrained(LOCAL_MODEL_PATH)
         processor.save_pretrained(LOCAL_MODEL_PATH)
+        print("Finished saving")
     # dataset = load_dataset("google/fleurs", "he_il", split="test")
     # kan_fleurs= kan_fleurs.map(remove_special_characters)
     
