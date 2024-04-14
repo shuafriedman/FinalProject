@@ -8,9 +8,7 @@ import os
 import sys
 import pathlib
 import subprocess
-from transformers import Wav2Vec2CTCTokenizer
-from transformers import SeamlessM4TFeatureExtractor
-from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC, AutoProcessor
+from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC, AutoProcessor, AutoFeatureExtractor, AutoTokenizer, AutoModel
 from transformers import Trainer, TrainingArguments
 #import load_metric
 from datasets import load_metric, DatasetDict, load_from_disk, load_dataset
@@ -24,13 +22,18 @@ from tqdm.auto import tqdm
 import logging
 @dataclass
 class DataCollatorCTCWithPadding:
-    processor: Wav2Vec2BertProcessor
+    processor: None
+    input_key: None
     padding: Union[bool, str] = True
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
         # split inputs and labels since they have to be of different lenghts and need
         # different padding methods
-        input_features = [{"input_features": feature["input_features"]} for feature in features]
+        if self.input_key=='input_features':
+            input_features = [{"input_features": feature["input_features"]} for feature in features]
+        elif self.input_key=='input_values':
+            input_features = [{"input_values": feature["input_values"]} for feature in features]
+
         label_features = [{"input_ids": feature["labels"]} for feature in features]
 
         batch = self.processor.pad(
@@ -68,7 +71,7 @@ def compute_metrics_custom(wer_metric, processor):
 def load_dataset_from_disk():
     dataset_name = DATASETS[0]['local_path']
     filtered_suffix = "-filtered" if FILTER_LONG_SAMPLES else None
-    preprocessing_suffix="-prox" if PERFORM_PREPROCESSING_ON_DATASET_CREATION else None
+    preprocessing_suffix="-proc" if PERFORM_PREPROCESSING_ON_DATASET_CREATION else None
     # if FROM_HUB:
     #     dataset=load_dataset(f"Shuaf98/{dataset_name}{suffix}", streaming=True)
     #     train_samples_len=None
@@ -77,7 +80,9 @@ def load_dataset_from_disk():
     #     train_samples_len=dataset['train'].num_rows
     #     for name in dataset.keys():
     #         dataset[name] = dataset[name].to_iterable_dataset()
-    dataset= load_from_disk(f"{DATA_FOLDER_PATH}/{dataset_name}{filtered_suffix}{preprocessing_suffix}")
+    dataset_name=f"{DATA_FOLDER_PATH}/{dataset_name}{filtered_suffix}{preprocessing_suffix}"
+    print("Loading Dataset : ", dataset_name)
+    dataset= load_from_disk(dataset_name)
     train_samples_len=dataset['train'].num_rows
     if DRY_RUN:
         small_train_subset = dataset['train'].select(range(128))
@@ -126,8 +131,8 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
         for batch in tqdm_dataloader:
             outputs = model(**batch)
             loss = outputs.loss
-            total_loss += accelerator.gather(loss).item() * batch["input_features"].size(0)
-            total_items += batch["input_features"].size(0)
+            total_loss += accelerator.gather(loss).item() * batch[MODEL_CONFIG['input_key']].size(0)
+            total_items += batch[MODEL_CONFIG['input_key']].size(0)
 
             # Decode the predicted IDs to text
             logits = outputs.logits
@@ -154,22 +159,22 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
     return average_loss, wer_score
 
 def main():
+    model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     print("Loading tokenizer")
     print("Loading Processor")
-    processor = Wav2Vec2BertProcessor.from_pretrained(LOCAL_MODEL_PATH if DOWNLOAD_MODEL_LOCALLY else None) #TODO
+    processor = MODEL_CONFIG['processor'].from_pretrained(model_path)
     print("Loading Dataset")
     dataset, train_samples_len = load_dataset_from_disk()
     print("Mapping Dataset Processor to Dataset")
 
     
-    data_collator = DataCollatorCTCWithPadding(processor=processor, padding=True)
+    data_collator = DataCollatorCTCWithPadding(processor=processor, input_key=MODEL_CONFIG['input_key'], padding=True)
     wer_metric = load_metric("wer")
     compute_metric= compute_metrics_custom(wer_metric, processor)
     print("Defining Model and Arguements")
-    path = LOCAL_MODEL_PATH if DOWNLOAD_MODEL_LOCALLY else BASE_MODEL_NAME
     if MANUALLY_SET_MODEL_CONFIG:
-        model = Wav2Vec2BertForCTC.from_pretrained(
-            path,
+        model = MODEL_CONFIG['model'].from_pretrained(
+            model_path,
             attention_dropout=0.0,
             hidden_dropout=0.0,
             feat_proj_dropout=0.0,
@@ -181,7 +186,7 @@ def main():
             vocab_size=len(processor.tokenizer),
         )
     else:
-        model=Wav2Vec2BertForCTC.from_pretrained(
+        model=MODEL_CONFIG['model'].from_pretrained(
             path,
             pad_token_id=processor.tokenizer.pad_token_id,
             vocab_size=len(processor.tokenizer)
@@ -191,59 +196,38 @@ def main():
     print("Getting Training Args")
     batch_size = 8 if not DRY_RUN else 1
     gradient_accumulation = 4 if not DRY_RUN else 2
-    num_epochs = 6 if not DRY_RUN else 1
+    num_epochs = 1 if not DRY_RUN else 1
     if train_samples_len:
         max_steps= num_epochs * train_samples_len / batch_size / gradient_accumulation
     else:
-        max_steps=None
+        max_steps=128
     training_args = TrainingArguments(
         output_dir= './',
         group_by_length=True,
         per_device_train_batch_size= batch_size,
         gradient_accumulation_steps=gradient_accumulation,
-        evaluation_strategy="steps",
+        evaluation_strategy="epoch",
         num_train_epochs=num_epochs,
         gradient_checkpointing=True,
         fp16=fp16,
         save_steps=600,
-        max_steps = max_steps,
-        eval_steps=300 if not DRY_RUN else 8,
-        logging_steps=300,
+        # max_steps = max_steps,
+        # eval_steps=300 if not DRY_RUN else max_steps,
+        # logging_steps=300,
         learning_rate=5e-5,
-        warmup_steps=500,
+        # warmup_steps=500,
         save_total_limit=2,
         push_to_hub=False,
-        optim="adamw_bnb_8bit"
-    )
+        optim="adamw_bnb_8bit",
+        # torch_compile=True
+        # auto_find_batch_size=True
+    ) 
     print("Setting Trainer")
-    # trainer = Trainer(
-    #     model=model,
-    #     data_collator=data_collator,
-    #     args=training_args,
-    #     compute_metrics=compute_metric,
-    #     train_dataset= dataset["train"],
-    #     eval_dataset=dataset["test"],
-    #     tokenizer=processor.feature_extractor,
-    # )
-    # print("Beginning Training")
-    # trainer.train()
-    # print("Saving Model")
-    # trainer.save_model(FINETUNED_MODEL_PATH)
-
 # Instead of directly passing 'dataset' to DataLoader, pass dataset['train'] or dataset['test']
-    dataloaders = {
-        'train': DataLoader(dataset['train'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count()),
-        'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count())
-    }
-    progress_bar = tqdm(range(train_samples_len // training_args.train_batch_size), desc="Training")
-    if training_args.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+    
 
     optimizer = get_adam8_bit(training_args, model)
-    accelerator = Accelerator(mixed_precision= "fp16" if torch.cuda.is_available() else "no")
-    dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
-         dataloaders['train'],  dataloaders['test'], model, optimizer
-    )
+
 
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
@@ -254,32 +238,58 @@ def main():
     # Calculate the total training steps for all epochs
     total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
 
-    for epoch in range(training_args.num_train_epochs):
+    if USE_TRAINER:
+        model = Trainer(
+        model=model,
+        data_collator=data_collator,
+        args=training_args,
+        compute_metrics=compute_metric,
+        train_dataset= dataset["train"],
+        eval_dataset=dataset["test"],
+        tokenizer=processor.feature_extractor,
+        # optimizers=(optimizer, None)
+        )
+        print("Beginning Training")
         model.train()
-          # Loop over the number of epochs
-        for step, batch in enumerate(dataloaders['train'], start=1):
-            loss = model(**batch).loss
-            loss = loss / training_args.gradient_accumulation_steps
-            accelerator.backward(loss)
-            if step % training_args.gradient_accumulation_steps == 0 or step == total_steps_per_epoch:
-                optimizer.step()
-                optimizer.zero_grad()
 
-            # This condition is adjusted to reflect the current position within the epoch
-            current_global_step = step + epoch * total_steps_per_epoch
-            progress_bar.update(1)
-            progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
+    else:
+        dataloaders = {
+            'train': DataLoader(dataset['train'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count()),
+            'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count())
+        }
+        accelerator = Accelerator(mixed_precision= "fp16" if torch.cuda.is_available() else "no")
+        dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
+            dataloaders['train'],  dataloaders['test'], model, optimizer
+        )
+        progress_bar = tqdm(range(train_samples_len // training_args.train_batch_size), desc="Training")
+        if training_args.gradient_checkpointing:
+            model.gradient_checkpointing_enable()
+        for epoch in range(training_args.num_train_epochs):
+            model.train()
+            # Loop over the number of epochs
+            for step, batch in enumerate(dataloaders['train'], start=1):
+                loss = model(**batch).loss
+                loss = loss / training_args.gradient_accumulation_steps
+                accelerator.backward(loss)
+                if step % training_args.gradient_accumulation_steps == 0 or step == total_steps_per_epoch:
+                    optimizer.step()
+                    optimizer.zero_grad()
 
-            # Evaluate at the end of each epoch
-            if current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
-                eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
-                logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
+                # This condition is adjusted to reflect the current position within the epoch
+                current_global_step = step + epoch * total_steps_per_epoch
+                progress_bar.update(1)
+                progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
 
-        progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
+                # Evaluate at the end of each epoch
+                if current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
+                    eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
+                    logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
 
-    progress_bar.close()
-    print("Finished Training")
-    model.save_pretrained(FINETUNED_MODEL_PATH)
+            progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
+
+        progress_bar.close()
+        print("Finished Training")
+    model.save_pretrained(f"{model_path}-finetuned")
 if __name__=='__main__':
    main()
 
