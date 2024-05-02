@@ -470,3 +470,9 @@ word2vec-kenlm/data/recordings/bavametzia_2.mp3
 word2vec-kenlm/data/recordings/bavametzia4.mp3
 wav2vec-kenlm/data/mesivta/5gram_correct.arpa
 wav2vec-kenlm/data/mesivta/5gram.arpa
+wav2vec-kenlm/data/ivritai/5gram_correct.arpa
+wav2vec-kenlm/data/ivritai/5gram.arpa
+wav2vec-kenlm/data/ivritai/ivritai.txt
+wav2vec-kenlm/data/ivritai/5gram_correct.arpa
+wav2vec-kenlm/data/ivritai/5gram.arpa
+wav2vec-kenlm/data/ivritai/ivritai.txt
