@@ -1,1 +1,0 @@
-kill -9 $(pgrep -u sfriedman291 python)
