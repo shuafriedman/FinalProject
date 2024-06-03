@@ -1,10 +1,12 @@
 import re
 import os
-from datasets import load_dataset
 import json
 from pathlib import Path
 import string
-
+from datasets import ClassLabel
+import random
+import pandas as pd
+from IPython.display import display, HTML
 SUBSAMPLE_RATIO = 1.0
 FILTER_THRESHOLD = 15
 chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\'\]\[\{\}\־]'
@@ -71,8 +73,7 @@ def standardize_dataset(dataset):
         dataset = dataset.rename_column("text", "transcription")
     except:
         pass
-    print("writing name of dataset to dataset column")
-    dataset= dataset.map(remove_special_characters)
+    print("Removing Special Characters")
     return dataset
 
 def prepare_dataset(batch, processor, input_key):
@@ -85,4 +86,14 @@ def prepare_dataset(batch, processor, input_key):
     batch["labels"] = processor(text=batch["transcription"]).input_ids
     return batch
 
-
+def show_random_elements(dataset, num_examples=10):
+    assert num_examples <= len(dataset), "Can't pick more elements than there are in the dataset."
+    picks = []
+    for _ in range(num_examples):
+        pick = random.randint(0, len(dataset)-1)
+        while pick in picks:
+            pick = random.randint(0, len(dataset)-1)
+        picks.append(pick)
+    
+    df = pd.DataFrame(dataset[picks])
+    display(HTML(df.to_html()))
