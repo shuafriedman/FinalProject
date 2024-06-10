@@ -476,3 +476,5 @@ wav2vec-kenlm/data/ivritai/ivritai.txt
 wav2vec-kenlm/data/ivritai/5gram_correct.arpa
 wav2vec-kenlm/data/ivritai/5gram.arpa
 wav2vec-kenlm/data/ivritai/ivritai.txt
+demo/5gram_correct.arpa
+demo/5gram.arpa
