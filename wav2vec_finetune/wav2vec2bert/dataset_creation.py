@@ -81,7 +81,7 @@ def standardize_dataset(dataset, dataset_name):
 
 def main():
     local_model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}"
-    finetuned_model_path= f"{MODEL_CONFIG['model_name']}-finetuned"
+    finetuned_model_path= f"{FINETUNED_MODEL_PATH}/{MODEL_CONFIG['model_name']}-finetuned"
     print("Model Path")
     print("Finetuned Path")
     print(finetuned_model_path)
@@ -172,12 +172,10 @@ def main():
     print("Downloading Base Model locally")
     if DOWNLOAD_MODEL_LOCALLY:
         print("downloading model")
-        print("download feature extractor")
-
         model = MODEL_CONFIG['model'].from_pretrained(MODEL_CONFIG['model_name'], vocab_size=len(processor.tokenizer))
-        print("download tokenizer")
         print("saving locally")
         model.save_pretrained(local_model_path)
+        print("saving processor")
         processor.save_pretrained(local_model_path)
         print("Finished saving")
     # dataset = load_dataset("google/fleurs", "he_il", split="test")

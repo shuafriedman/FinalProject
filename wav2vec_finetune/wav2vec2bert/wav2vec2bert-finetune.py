@@ -132,7 +132,7 @@ class SpeechDataModule(pl.LightningDataModule):
         return DataLoader(self.dataset["test"], batch_size=self.batch_size, collate_fn=self.data_collator)
 
 def main():
-    model_path = f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
+    model_path = f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}-finetuned" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     processor = MODEL_CONFIG['processor'].from_pretrained(model_path)
     batch_size = 8 if not DRY_RUN else 1
     training_args = TrainingArguments(
