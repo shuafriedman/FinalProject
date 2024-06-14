@@ -81,8 +81,8 @@ class SpeechRecognitionModel(pl.LightningModule):
         labels[labels == -100] = self.processor.tokenizer.pad_token_id
         label_str = self.processor.batch_decode(labels, group_tokens=False)
         wer = self.wer_metric.compute(predictions=pred_str, references=label_str)
-        self.log('val_loss', val_loss, prog_bar=True)
-        self.log('wer', wer, prog_bar=True)
+        self.log('val_loss', val_loss, prog_bar=True, sync_dist=True)
+        self.log('wer', wer, prog_bar=True, sync_dist=True)
 
     def configure_optimizers(self):
         decay_parameters = get_parameter_names(self.model, [nn.LayerNorm])
@@ -141,7 +141,6 @@ def main():
         gradient_accumulation_steps=4 if not DRY_RUN else 2,
         num_train_epochs=1 if not DRY_RUN else 1,
         gradient_checkpointing=True,
-        fp16=torch.cuda.is_available(),
         save_steps=600,
         learning_rate=5e-5,
         save_total_limit=2,
