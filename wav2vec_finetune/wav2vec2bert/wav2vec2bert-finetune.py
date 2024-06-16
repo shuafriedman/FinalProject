@@ -118,6 +118,7 @@ class SpeechDataModule(pl.LightningDataModule):
         filtered_suffix = "-filtered" if FILTER_LONG_SAMPLES else None
         preprocessing_suffix = "-proc" if PERFORM_PREPROCESSING_ON_DATASET_CREATION else None
         dataset_name = f"{DATA_FOLDER_PATH}/{dataset_name}{filtered_suffix}{preprocessing_suffix}"
+        print("loading data from " + dataset_name)
         self.dataset = load_from_disk(dataset_name)
         if DRY_RUN:
             self.dataset = DatasetDict({
@@ -132,9 +133,9 @@ class SpeechDataModule(pl.LightningDataModule):
         return DataLoader(self.dataset["test"], batch_size=self.batch_size, collate_fn=self.data_collator)
 
 def main():
-    model_path = f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}-finetuned" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
-    processor = MODEL_CONFIG['processor'].from_pretrained(model_path)
-    batch_size = 8 if not DRY_RUN else 1
+    model_path = f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
+    processor = MODEL_CONFIG['processor'].from_pretrained(model_path + '-finetuned')
+    batch_size = 8 if not DRY_RUN else 2
     training_args = TrainingArguments(
         output_dir='./',
         per_device_train_batch_size=batch_size,
@@ -145,9 +146,9 @@ def main():
         learning_rate=5e-5,
         save_total_limit=2,
     )
-    
-    model = SpeechRecognitionModel(model_name=model_path, processor=processor, training_args=training_args)
+
     data_module = SpeechDataModule(processor=processor, input_key=MODEL_CONFIG['input_key'], batch_size=batch_size)
+    model = SpeechRecognitionModel(model_name=model_path, processor=processor, training_args=training_args)
     
     trainer = Trainer(
         accelerator='auto',

@@ -160,7 +160,8 @@ def main():
 
     feature_extractor= MODEL_CONFIG['feature_extractor'].from_pretrained(MODEL_CONFIG['model_name'])
     processor=MODEL_CONFIG['processor'](feature_extractor=feature_extractor, tokenizer=tokenizer)
-
+    print("saving processor")
+    processor.save_pretrained(local_model_path + '-finetuned')
     if PERFORM_PREPROCESSING_ON_DATASET_CREATION:
         dataset = dataset.map(prepare_dataset, remove_columns=dataset["train"].features.keys(), \
                             fn_kwargs={"processor": processor, "input_key": MODEL_CONFIG['input_key']})
@@ -175,8 +176,6 @@ def main():
         model = MODEL_CONFIG['model'].from_pretrained(MODEL_CONFIG['model_name'], vocab_size=len(processor.tokenizer))
         print("saving locally")
         model.save_pretrained(local_model_path)
-        print("saving processor")
-        processor.save_pretrained(local_model_path)
         print("Finished saving")
     # dataset = load_dataset("google/fleurs", "he_il", split="test")
     # kan_fleurs= kan_fleurs.map(remove_special_characters)

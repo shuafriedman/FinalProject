@@ -4,7 +4,7 @@ from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC, AutoProcesso
 
 fleurs_config = {
     'name': "google/fleurs",
-    'local_path': 'fleurs-imvladikon', #todo remove imvladikon
+    'local_path': 'fleurs', #todo remove imvladikon
     'language': 'he_il',
     'test_split': 'test'
 }
@@ -35,7 +35,7 @@ LOAD_DATASET_FROM_LOCAL=False
 DOWNLOAD_MODEL_LOCALLY=True
 FILTER_LONG_SAMPLES = True
 PERFORM_PREPROCESSING_ON_DATASET_CREATION = True
-FILTER_THRESHOLD = 4
+FILTER_THRESHOLD = 7
 SUBSAMPLE_RATIO=1.0
 USE_TRAINER=True
 MODEL_CONFIG=wav2vec2Bert_config
