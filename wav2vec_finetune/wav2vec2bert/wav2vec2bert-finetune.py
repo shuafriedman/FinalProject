@@ -85,6 +85,7 @@ def load_dataset_from_disk():
     dataset= load_from_disk(dataset_name)
     train_samples_len=dataset['train'].num_rows
     if DRY_RUN:
+        print("creating dataset for dry run")
         small_train_subset = dataset['train'].select(range(128))
         train_samples_len = 128
         small_test_subset = dataset['test'].select(range(128)) 
@@ -194,9 +195,9 @@ def main():
     print("Checking for cuda")
     fp16= "True" if torch.cuda.is_available() else False
     print("Getting Training Args")
-    batch_size = 8 if not DRY_RUN else 1
+    batch_size = 4 if not DRY_RUN else 1
     gradient_accumulation = 4 if not DRY_RUN else 2
-    num_epochs = 1 if not DRY_RUN else 1
+    num_epochs = 3 if not DRY_RUN else 1
     if train_samples_len:
         max_steps= num_epochs * train_samples_len / batch_size / gradient_accumulation
     else:
@@ -210,13 +211,12 @@ def main():
         num_train_epochs=num_epochs,
         gradient_checkpointing=True,
         fp16=fp16,
-        save_steps=600,
+        # save_steps=600,
         # max_steps = max_steps,
         # eval_steps=300 if not DRY_RUN else max_steps,
-        # logging_steps=300,
+        logging_steps=20,
         learning_rate=5e-5,
         # warmup_steps=500,
-        save_total_limit=2,
         push_to_hub=False,
         optim="adamw_bnb_8bit",
         # torch_compile=True
@@ -250,6 +250,7 @@ def main():
         )
         print("Beginning Training")
         model.train()
+        model.save_model(f"{model_path}-finetuned")
 
     else:
         dataloaders = {
@@ -288,7 +289,7 @@ def main():
 
         progress_bar.close()
         print("Finished Training")
-    model.save_pretrained(f"{model_path}-finetuned")
+        model.save_pretrained(f"{model_path}-finetuned")
 if __name__=='__main__':
    main()
 

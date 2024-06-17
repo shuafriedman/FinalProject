@@ -4,7 +4,7 @@ from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC, AutoProcesso
 
 fleurs_config = {
     'name': "google/fleurs",
-    'local_path': 'fleurs-imvladikon', #todo remove imvladikon
+    'local_path': 'fleurs',
     'language': 'he_il',
     'test_split': 'test'
 }
