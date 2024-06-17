@@ -162,7 +162,7 @@ def main():
     model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     print("Loading tokenizer")
     print("Loading Processor")
-    processor = MODEL_CONFIG['processor'].from_pretrained(model_path)
+    processor = MODEL_CONFIG['processor'].from_pretrained(model_path + '-finetuned')
     print("Loading Dataset")
     dataset, train_samples_len = load_dataset_from_disk()
     print("Mapping Dataset Processor to Dataset")

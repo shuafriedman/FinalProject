@@ -8,6 +8,8 @@ from transformers import Wav2Vec2BertForCTC, Wav2Vec2FeatureExtractor, Wav2Vec2P
 from transformers import Wav2Vec2CTCTokenizer
 from transformers import SeamlessM4TFeatureExtractor
 from transformers import Wav2Vec2BertProcessor
+import torch
+import numpy as np
 chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\'\]\[\{\}\־]'
 # hebrew_letters = [
 #     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט',
@@ -24,6 +26,13 @@ def prepare_dataset(batch, processor, input_key):
         batch["input_length"] = len(batch["input_values"])
     batch["labels"] = processor(text=batch["transcription"]).input_ids
     return batch
+
+def remove_nan_batches(batch, input_key):
+    if np.isnan(batch[input_key]).any():
+        return False
+    if np.isnan(batch['labels']).any():
+        return False
+    return True
 
 def filter_long_samples(dataset):
     def is_shorter_than_max_duration(example):
@@ -81,7 +90,7 @@ def standardize_dataset(dataset, dataset_name):
 
 def main():
     local_model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}"
-    finetuned_model_path= f"{MODEL_CONFIG['model_name']}-finetuned"
+    finetuned_model_path= f"{FINETUNED_MODEL_PATH}/{MODEL_CONFIG['model_name']}-finetuned"
     print("Model Path")
     print("Finetuned Path")
     print(finetuned_model_path)
@@ -140,7 +149,6 @@ def main():
     if KEEP_HEBREW_ONLY:
         for name in dataset:
             dataset[name] = drop_english_samples(dataset[name])
-            
     print("Casting Audio")
     dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
 
@@ -160,11 +168,14 @@ def main():
 
     feature_extractor= MODEL_CONFIG['feature_extractor'].from_pretrained(MODEL_CONFIG['model_name'])
     processor=MODEL_CONFIG['processor'](feature_extractor=feature_extractor, tokenizer=tokenizer)
-
+    print("saving processor")
+    processor.save_pretrained(local_model_path + '-finetuned')
     if PERFORM_PREPROCESSING_ON_DATASET_CREATION:
         dataset = dataset.map(prepare_dataset, remove_columns=dataset["train"].features.keys(), \
                             fn_kwargs={"processor": processor, "input_key": MODEL_CONFIG['input_key']})
-                        
+    for name in dataset:
+        dataset[name] = dataset[name].filter(remove_nan_batches, fn_kwargs={"input_key": MODEL_CONFIG['input_key']})
+
     print("Saving dataset to disk")
     filtered_suffix = "-filtered" if FILTER_LONG_SAMPLES else None
     preprocessing_suffix="-proc" if PERFORM_PREPROCESSING_ON_DATASET_CREATION else None
@@ -172,13 +183,9 @@ def main():
     print("Downloading Base Model locally")
     if DOWNLOAD_MODEL_LOCALLY:
         print("downloading model")
-        print("download feature extractor")
-
         model = MODEL_CONFIG['model'].from_pretrained(MODEL_CONFIG['model_name'], vocab_size=len(processor.tokenizer))
-        print("download tokenizer")
         print("saving locally")
         model.save_pretrained(local_model_path)
-        processor.save_pretrained(local_model_path)
         print("Finished saving")
     # dataset = load_dataset("google/fleurs", "he_il", split="test")
     # kan_fleurs= kan_fleurs.map(remove_special_characters)
