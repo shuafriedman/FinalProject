@@ -3,6 +3,7 @@ import bitsandbytes as bnb
 from torch import nn
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
+from pytorch_lightning.callbacks import ModelCheckpoint
 from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC, AutoProcessor, AutoFeatureExtractor, AutoTokenizer, AutoModel
 from transformers import TrainingArguments
 from datasets import load_metric, DatasetDict, load_from_disk
@@ -133,8 +134,9 @@ class SpeechDataModule(pl.LightningDataModule):
         return DataLoader(self.dataset["test"], batch_size=self.batch_size, collate_fn=self.data_collator)
 
 def main():
-    model_path = f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
-    processor = MODEL_CONFIG['processor'].from_pretrained(model_path + '-finetuned')
+    base_model_path = f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
+    model_path = base_model_path + '-finetuned'
+    processor = MODEL_CONFIG['processor'].from_pretrained(model_path)
     batch_size = 8 if not DRY_RUN else 2
     training_args = TrainingArguments(
         output_dir='./',
@@ -144,21 +146,30 @@ def main():
         gradient_checkpointing=True,
         save_steps=600,
         learning_rate=5e-5,
-        save_total_limit=2,
     )
 
     data_module = SpeechDataModule(processor=processor, input_key=MODEL_CONFIG['input_key'], batch_size=batch_size)
-    model = SpeechRecognitionModel(model_name=model_path, processor=processor, training_args=training_args)
+    model = SpeechRecognitionModel(model_name=base_model_path, processor=processor, training_args=training_args)
     
+    model_checkpoint = ModelCheckpoint(
+        dirpath=LOCAL_MODEL_PATH,
+        filename="best-checkpoint",
+        save_top_k=1,
+        verbose=True,
+        monitor="val_loss",
+        mode="min",
+    )
     trainer = Trainer(
         accelerator='auto',
         devices='auto',
         strategy='auto',
         max_epochs=training_args.num_train_epochs,
+        callbacks=[model_checkpoint]
         # gradient_clip_val=1.0,
     )
 
     trainer.fit(model, datamodule=data_module)
+    #save the model
 
 if __name__ == '__main__':
     main()
