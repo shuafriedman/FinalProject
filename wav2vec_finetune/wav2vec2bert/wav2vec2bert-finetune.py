@@ -45,6 +45,9 @@ class DataCollatorCTCWithPadding:
         batch["labels"] = labels
         return batch
 
+def replace_nan(tensor):
+    return torch.where(torch.isnan(tensor), torch.zeros_like(tensor), tensor)
+
 class SpeechRecognitionModel(pl.LightningModule):
     def __init__(self, model_name, processor, training_args):
         super().__init__()
@@ -65,11 +68,19 @@ class SpeechRecognitionModel(pl.LightningModule):
         self.training_args = training_args
 
     def forward(self, batch):
-        return self.model(**batch)
+        outputs= self.model(**batch)
+        outputs.logits = replace_nan(outputs.logits)
+        return outputs
 
     def training_step(self, batch, batch_idx):
         outputs = self(batch)
         loss = outputs.loss
+        if torch.isnan(loss):
+            print(f"NaN detected in training loss at step {batch_idx}")
+        if torch.isinf(loss):
+            print(f"Inf detected in training loss at step {batch_idx}")
+
+        self.log('train_loss', loss, prog_bar=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -77,7 +88,8 @@ class SpeechRecognitionModel(pl.LightningModule):
         val_loss = outputs.loss
         logits = outputs.logits
         pred_ids = torch.argmax(logits, dim=-1)
-        pred_str = self.processor.batch_decode(pred_ids)
+        pred_str = self.processor.batch_decode(pred_ids, skip_special_tokens=True)
+        
         labels = batch["labels"]
         labels[labels == -100] = self.processor.tokenizer.pad_token_id
         label_str = self.processor.batch_decode(labels, group_tokens=False)
@@ -137,15 +149,17 @@ def main():
     base_model_path = f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     model_path = base_model_path + '-finetuned'
     processor = MODEL_CONFIG['processor'].from_pretrained(model_path)
-    batch_size = 8 if not DRY_RUN else 2
+    batch_size = 4 if not DRY_RUN else 2
     training_args = TrainingArguments(
         output_dir='./',
         per_device_train_batch_size=batch_size,
         gradient_accumulation_steps=4 if not DRY_RUN else 2,
-        num_train_epochs=1 if not DRY_RUN else 1,
+        num_train_epochs=2 if not DRY_RUN else 1,
         gradient_checkpointing=True,
         save_steps=600,
-        learning_rate=5e-5,
+        fp16=True,
+        weight_decay=0.005,
+        learning_rate=1e-5,
     )
 
     print("loading data module")
@@ -166,8 +180,8 @@ def main():
         devices='auto',
         strategy='auto',
         max_epochs=training_args.num_train_epochs,
-        callbacks=[model_checkpoint]
-        # gradient_clip_val=1.0,
+        callbacks=[model_checkpoint],
+        gradient_clip_val=1.0,
     )
     print("fitting model")
     trainer.fit(model, datamodule=data_module)
