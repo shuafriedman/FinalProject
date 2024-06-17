@@ -228,7 +228,6 @@ def main():
 
     optimizer = get_adam8_bit(training_args, model)
 
-
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
     total_steps_per_epoch = train_samples_len // training_args.train_batch_size
