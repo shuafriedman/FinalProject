@@ -148,11 +148,13 @@ def main():
         learning_rate=5e-5,
     )
 
+    print("loading data module")
     data_module = SpeechDataModule(processor=processor, input_key=MODEL_CONFIG['input_key'], batch_size=batch_size)
+    print("loading model")
     model = SpeechRecognitionModel(model_name=base_model_path, processor=processor, training_args=training_args)
-    
+    print("model loaded")
     model_checkpoint = ModelCheckpoint(
-        dirpath=LOCAL_MODEL_PATH,
+        dirpath=model_path,
         filename="best-checkpoint",
         save_top_k=1,
         verbose=True,
@@ -167,7 +169,7 @@ def main():
         callbacks=[model_checkpoint]
         # gradient_clip_val=1.0,
     )
-
+    print("fitting model")
     trainer.fit(model, datamodule=data_module)
     #save the model
 
