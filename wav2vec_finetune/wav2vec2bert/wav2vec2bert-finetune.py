@@ -20,37 +20,60 @@ from accelerate import Accelerator
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
 import logging
+from accelerate import Accelerator, DistributedType
+from typing import List, Dict, Union
+import torch
+
 @dataclass
 class DataCollatorCTCWithPadding:
-    processor: None
-    input_key: None
-    padding: Union[bool, str] = True
+    def __init__(self, processor, input_key='input_features', padding=True):
+        self.processor = processor
+        self.input_key = input_key
+        self.padding = padding
 
     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-        # split inputs and labels since they have to be of different lenghts and need
-        # different padding methods
-        if self.input_key=='input_features':
+        if self.input_key == 'input_features':
             input_features = [{"input_features": feature["input_features"]} for feature in features]
-        elif self.input_key=='input_values':
+        elif self.input_key == 'input_values':
             input_features = [{"input_values": feature["input_values"]} for feature in features]
 
         label_features = [{"input_ids": feature["labels"]} for feature in features]
 
+        # Determine pad_to_multiple_of based on accelerator's mixed precision
+        if self.processor.distributed_type == DistributedType.XLA:
+            max_length = 128
+        else:
+            max_length = None
+
+        if self.processor.mixed_precision == "fp8":
+            pad_to_multiple_of = 16
+        elif self.processor.mixed_precision != "no":
+            pad_to_multiple_of = 8
+        else:
+            pad_to_multiple_of = None
+
         batch = self.processor.pad(
             input_features,
             padding=self.padding,
+            max_length=max_length,
+            pad_to_multiple_of=pad_to_multiple_of,
             return_tensors="pt",
         )
 
         labels_batch = self.processor.pad(
             labels=label_features,
             padding=self.padding,
+            max_length=max_length,
+            pad_to_multiple_of=pad_to_multiple_of,
             return_tensors="pt",
         )
-        # replace padding with -100 to ignore loss correctly
+
+        # Replace padding with -100 to ignore loss correctly
         labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
         batch["labels"] = labels
+
         return batch
+
     
 def compute_metrics_custom(wer_metric, processor):
     def compute_metric(pred, ):
