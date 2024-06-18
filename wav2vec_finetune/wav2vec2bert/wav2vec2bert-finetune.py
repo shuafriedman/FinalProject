@@ -280,7 +280,7 @@ def main():
             'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator)
         }
         
-        accelerator = Accelerator(mixed_precision="no")
+        accelerator = Accelerator()
         dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
             dataloaders['train'],  dataloaders['test'], model, optimizer
         )
