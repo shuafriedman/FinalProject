@@ -59,7 +59,7 @@ def compute_metrics_custom(wer_metric, processor):
 
         pred.label_ids[pred.label_ids == -100] = processor.tokenizer.pad_token_id
 
-        pred_str = processor.batch_decode(pred_ids)
+        pred_str = processor.batch_decode(pred_ids, skip_special_tokens=True)
         # we do not want to group tokens when computing the metrics
         label_str = processor.batch_decode(pred.label_ids, group_tokens=False)
 
@@ -170,7 +170,7 @@ def main():
 
     
     data_collator = DataCollatorCTCWithPadding(processor=processor, input_key=MODEL_CONFIG['input_key'], padding=True)
-    wer_metric = load_metric("wer")
+    wer_metric = load_metric("wer", trust_remote_code=True)
     compute_metric= compute_metrics_custom(wer_metric, processor)
     print("Defining Model and Arguements")
     if MANUALLY_SET_MODEL_CONFIG:
@@ -188,12 +188,11 @@ def main():
         )
     else:
         model=MODEL_CONFIG['model'].from_pretrained(
-            path,
+            model_path,
             pad_token_id=processor.tokenizer.pad_token_id,
             vocab_size=len(processor.tokenizer)
         )
     print("Checking for cuda")
-    fp16= "True" if torch.cuda.is_available() else False
     print("Getting Training Args")
     batch_size = 4 if not DRY_RUN else 1
     gradient_accumulation = 4 if not DRY_RUN else 2
@@ -210,7 +209,7 @@ def main():
         evaluation_strategy="epoch",
         num_train_epochs=num_epochs,
         gradient_checkpointing=True,
-        fp16=fp16,
+        fp16=True,
         # save_steps=600,
         # max_steps = max_steps,
         # eval_steps=300 if not DRY_RUN else max_steps,
@@ -254,36 +253,37 @@ def main():
 
     else:
         dataloaders = {
-            'train': DataLoader(dataset['train'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count()),
-            'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count())
+            'train': DataLoader(dataset['train'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator),
+            'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator)
         }
-        accelerator = Accelerator(mixed_precision= "fp16" if torch.cuda.is_available() else "no")
+        
+        accelerator = Accelerator(mixed_precision="no")
         dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
             dataloaders['train'],  dataloaders['test'], model, optimizer
         )
         progress_bar = tqdm(range(train_samples_len // training_args.train_batch_size), desc="Training")
-        if training_args.gradient_checkpointing:
-            model.gradient_checkpointing_enable()
+
         for epoch in range(training_args.num_train_epochs):
             model.train()
             # Loop over the number of epochs
             for step, batch in enumerate(dataloaders['train'], start=1):
-                loss = model(**batch).loss
-                loss = loss / training_args.gradient_accumulation_steps
-                accelerator.backward(loss)
-                if step % training_args.gradient_accumulation_steps == 0 or step == total_steps_per_epoch:
+                with accelerator.accumulate(model):
+                    for key in batch:
+                        if batch[key].dtype == torch.float16:
+                            batch[key] = batch[key].to(torch.float32)
+                    loss = model(**batch).loss
+                    accelerator.backward(loss)
                     optimizer.step()
                     optimizer.zero_grad()
+                    # This condition is adjusted to reflect the current position within the epoch
+                    current_global_step = step + epoch * total_steps_per_epoch
+                    progress_bar.update(1)
+                    progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
 
-                # This condition is adjusted to reflect the current position within the epoch
-                current_global_step = step + epoch * total_steps_per_epoch
-                progress_bar.update(1)
-                progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
-
-                # Evaluate at the end of each epoch
-                if current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
-                    eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
-                    logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
+                    # Evaluate at the end of each epoch
+                    if current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
+                        eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
+                        logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
 
             progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
 
@@ -292,4 +292,3 @@ def main():
         model.save_pretrained(f"{model_path}-finetuned")
 if __name__=='__main__':
    main()
-
