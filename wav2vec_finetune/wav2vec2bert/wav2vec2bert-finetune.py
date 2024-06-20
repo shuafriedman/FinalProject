@@ -26,8 +26,9 @@ import torch
 
 @dataclass
 class DataCollatorCTCWithPadding:
-    def __init__(self, processor, input_key='input_features', padding=True):
+    def __init__(self, processor, accelerator, input_key='input_features', padding=True):
         self.processor = processor
+        self.accelerator= accelerator
         self.input_key = input_key
         self.padding = padding
 
@@ -40,14 +41,14 @@ class DataCollatorCTCWithPadding:
         label_features = [{"input_ids": feature["labels"]} for feature in features]
 
         # Determine pad_to_multiple_of based on accelerator's mixed precision
-        if self.processor.distributed_type == DistributedType.XLA:
+        if self.accelerator.distributed_type == DistributedType.XLA:
             max_length = 128
         else:
             max_length = None
 
-        if self.processor.mixed_precision == "fp8":
+        if self.accelerator.mixed_precision == "fp8":
             pad_to_multiple_of = 16
-        elif self.processor.mixed_precision != "no":
+        elif self.accelerator.mixed_precision != "no":
             pad_to_multiple_of = 8
         else:
             pad_to_multiple_of = None
@@ -191,10 +192,6 @@ def main():
     dataset, train_samples_len = load_dataset_from_disk()
     print("Mapping Dataset Processor to Dataset")
 
-    
-    data_collator = DataCollatorCTCWithPadding(processor=processor, input_key=MODEL_CONFIG['input_key'], padding=True)
-    wer_metric = load_metric("wer", trust_remote_code=True)
-    compute_metric= compute_metrics_custom(wer_metric, processor)
     print("Defining Model and Arguements")
     if MANUALLY_SET_MODEL_CONFIG:
         model = MODEL_CONFIG['model'].from_pretrained(
@@ -258,6 +255,11 @@ def main():
 
     # Calculate the total training steps for all epochs
     total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
+    accelerator = Accelerator()
+
+    data_collator = DataCollatorCTCWithPadding(processor=processor, accelerator=accelerator, input_key=MODEL_CONFIG['input_key'], padding=True)
+    wer_metric = load_metric("wer", trust_remote_code=True)
+    compute_metric= compute_metrics_custom(wer_metric, processor)
 
     if USE_TRAINER:
         model = Trainer(
@@ -279,8 +281,8 @@ def main():
             'train': DataLoader(dataset['train'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator),
             'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator)
         }
+
         
-        accelerator = Accelerator()
         dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
             dataloaders['train'],  dataloaders['test'], model, optimizer
         )

@@ -1,7 +1,7 @@
 compute_environment: LOCAL_MACHINE
 debug: true
 deepspeed_config:
-  gradient_accumulation_steps: 2
+  gradient_accumulation_steps: 4
   gradient_clipping: 1.0
   offload_optimizer_device: cpu #none
   offload_param_device: cpu 
@@ -14,7 +14,7 @@ dynamo_config:
 enable_cpu_affinity: false
 machine_rank: 0
 main_training_function: main
-mixed_precision: fp16
+mixed_precision: no #no, fp16
 num_machines: 1
 num_processes: 1 #number of GPUS
 rdzv_backend: static
