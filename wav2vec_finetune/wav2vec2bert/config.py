@@ -30,6 +30,7 @@ wav2vec2Bert_config={
     "model_name": 'facebook/w2v-bert-2.0',
     "input_key": "input_features",
 }
+
 DATA_FOLDER_PATH = "datasets"
 LOAD_DATASET_FROM_LOCAL=False
 DOWNLOAD_MODEL_LOCALLY=True
