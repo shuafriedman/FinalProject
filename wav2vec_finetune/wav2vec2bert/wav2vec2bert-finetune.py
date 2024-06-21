@@ -1,5 +1,5 @@
 import torch
-# import bitsandbytes as bnb
+import bitsandbytes as bnb
 from torch.optim import AdamW
 from torch import nn
 from transformers.trainer_pt_utils import get_parameter_names
@@ -118,29 +118,30 @@ def load_dataset_from_disk():
     return dataset, train_samples_len
 
 def get_adam8_bit(adam_args, model):
+    print(adam_args)
     decay_parameters = get_parameter_names(model, [nn.LayerNorm])
     decay_parameters = [name for name in decay_parameters if "bias" not in name]
     optimizer_grouped_parameters = [
         {
             "params": [p for n, p in model.named_parameters() if n in decay_parameters],
-            "weight_decay": adam_args.weight_decay,
+            "weight_decay": adam_args["weight_decay"],
         },
         {
             "params": [p for n, p in model.named_parameters() if n not in decay_parameters],
-            "weight_decay": 0.0,
+            "weight_decay": adam_args["weight_decay"],
         },
     ]
 
     optimizer_kwargs = {
-        "betas": (adam_args.adam_beta1, adam_args.adam_beta2),
-        "eps": adam_args.adam_epsilon,
+        "betas": (adam_args["adam_beta1"], adam_args["adam_beta2"]),
+        "eps": adam_args["adam_epsilon"],
     }
-    optimizer_kwargs["lr"] = adam_args.learning_rate
+    optimizer_kwargs["lr"] = adam_args["learning_rate"]
     adam_bnb_optim = bnb.optim.Adam8bit(
         optimizer_grouped_parameters,
-        betas=(adam_args.adam_beta1, adam_args.adam_beta2),
-        eps=adam_args.adam_epsilon,
-        lr=adam_args.learning_rate,
+        betas=(adam_args["adam_beta1"], adam_args["adam_beta2"]),
+        eps=adam_args["adam_epsilon"],
+        lr=adam_args["learning_rate"],
     )
     return adam_bnb_optim
 
@@ -244,11 +245,13 @@ def main():
         # auto_find_batch_size=True
     )
     adam_args={}
-    adam_args["weight_decay"] = training_args.weight_decay
+    # adam_args["weight_decay"] = training_args.weight_decay
+    adam_args["weight_decay"] = 0.01
+
     print(adam_args)
     adam_args["adam_beta1"] = training_args.adam_beta1
     adam_args["adam_beta2"] = training_args.adam_beta2
-    adam_args["adam_adam_epsilon"] = training_args.adam_epsilon
+    adam_args["adam_epsilon"] = training_args.adam_epsilon
     adam_args["learning_rate"] = training_args.learning_rate
     print(adam_args)
 
