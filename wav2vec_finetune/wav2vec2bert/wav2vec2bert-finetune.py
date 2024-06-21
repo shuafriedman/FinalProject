@@ -10,18 +10,17 @@ import sys
 import pathlib
 import subprocess
 from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC, AutoProcessor, AutoFeatureExtractor, AutoTokenizer, AutoModel
-from transformers import Trainer, TrainingArguments
+from transformers import Trainer, TrainingArguments, get_linear_schedule_with_warmup
 #import load_metric
 from datasets import load_metric, DatasetDict, load_from_disk, load_dataset
 from config import *
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedType
 from torch.utils.data.dataloader import DataLoader
 from tqdm.auto import tqdm
 import logging
-from accelerate import Accelerator, DistributedType
 from typing import List, Dict, Union
 import torch
 
@@ -117,34 +116,6 @@ def load_dataset_from_disk():
         dataset = DatasetDict({"train": small_train_subset, "test": small_test_subset})
     return dataset, train_samples_len
 
-def get_adam8_bit(adam_args, model):
-    print(adam_args)
-    decay_parameters = get_parameter_names(model, [nn.LayerNorm])
-    decay_parameters = [name for name in decay_parameters if "bias" not in name]
-    optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters() if n in decay_parameters],
-            "weight_decay": adam_args["weight_decay"],
-        },
-        {
-            "params": [p for n, p in model.named_parameters() if n not in decay_parameters],
-            "weight_decay": adam_args["weight_decay"],
-        },
-    ]
-
-    optimizer_kwargs = {
-        "betas": (adam_args["adam_beta1"], adam_args["adam_beta2"]),
-        "eps": adam_args["adam_epsilon"],
-    }
-    optimizer_kwargs["lr"] = adam_args["learning_rate"]
-    adam_bnb_optim = bnb.optim.Adam8bit(
-        optimizer_grouped_parameters,
-        betas=(adam_args["adam_beta1"], adam_args["adam_beta2"]),
-        eps=adam_args["adam_epsilon"],
-        lr=adam_args["learning_rate"],
-    )
-    return adam_bnb_optim
-
 def evaluate(model, dataloader, accelerator, processor, wer_metric):
     model.eval()  # Set the model to evaluation mode
     total_loss = 0
@@ -226,18 +197,16 @@ def main():
         max_steps=128
 
     print("Setting Trainer")
-# Instead of directly passing 'dataset' to DataLoader, pass dataset['train'] or dataset['test']
     
     # optimizer = get_adam8_bit(adam_args, model)
-
-    optimizer = bnb.optim.Adam8bit(model.parameters(), lr=0.001, betas=(0.9, 0.995)) # add bnb optimizer
+    optimizer = bnb.optim.Adam8bit(model.parameters(), lr=1e-5, betas=(0.9, 0.995)) # add bnb optimizer
     # optimizer = AdamW(model.parameters(), lr=5e-5)
-
-    #TODO add learning rate scheduler
 
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
+
     total_steps_per_epoch = train_samples_len // 4
+
     if train_samples_len % 4 != 0:
         total_steps_per_epoch += 1
 
@@ -254,25 +223,32 @@ def main():
     }
 
     model.gradient_checkpointing_enable()
-    
-    dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
-        dataloaders['train'],  dataloaders['test'], model, optimizer
+
+    lr_scheduler = get_linear_schedule_with_warmup(
+        optimizer=optimizer,
+        num_warmup_steps=100,
+        num_training_steps=(len(dataloaders['train']) * num_epochs),
     )
+    dataloaders['train'], dataloaders['test'], model, optimizer, lr_scheduler = accelerator.prepare(
+        dataloaders['train'],  dataloaders['test'], model, optimizer, lr_scheduler
+    )
+
     progress_bar = tqdm(range(train_samples_len // 4), desc="Training")
-    
     
     for epoch in range(2):
         model.train()
         # Loop over the number of epochs
         for step, batch in enumerate(dataloaders['train'], start=1):
             with accelerator.accumulate(model):
-                for key in batch:
-                    if batch[key].dtype == torch.float16:
-                        batch[key] = batch[key].to(torch.float32)
+                # for key in batch:
+                #     if batch[key].dtype == torch.float16:
+                #         batch[key] = batch[key].to(torch.float32)
                 loss = model(**batch).loss
                 accelerator.backward(loss)
                 optimizer.step()
+                lr_scheduler.step() #possible that this should be commented out, accelerate defaults step_scheduler_with_optimizer to true by default
                 optimizer.zero_grad()
+
                 # This condition is adjusted to reflect the current position within the epoch
                 current_global_step = step + epoch * total_steps_per_epoch
                 progress_bar.update(1)
