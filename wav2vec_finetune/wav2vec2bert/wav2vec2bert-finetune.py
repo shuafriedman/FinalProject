@@ -117,13 +117,13 @@ def load_dataset_from_disk():
         dataset = DatasetDict({"train": small_train_subset, "test": small_test_subset})
     return dataset, train_samples_len
 
-def get_adam8_bit(training_args, model):
+def get_adam8_bit(adam_args, model):
     decay_parameters = get_parameter_names(model, [nn.LayerNorm])
     decay_parameters = [name for name in decay_parameters if "bias" not in name]
     optimizer_grouped_parameters = [
         {
             "params": [p for n, p in model.named_parameters() if n in decay_parameters],
-            "weight_decay": training_args.weight_decay,
+            "weight_decay": adam_args.weight_decay,
         },
         {
             "params": [p for n, p in model.named_parameters() if n not in decay_parameters],
@@ -132,15 +132,15 @@ def get_adam8_bit(training_args, model):
     ]
 
     optimizer_kwargs = {
-        "betas": (training_args.adam_beta1, training_args.adam_beta2),
-        "eps": training_args.adam_epsilon,
+        "betas": (adam_args.adam_beta1, adam_args.adam_beta2),
+        "eps": adam_args.adam_epsilon,
     }
-    optimizer_kwargs["lr"] = training_args.learning_rate
+    optimizer_kwargs["lr"] = adam_args.learning_rate
     adam_bnb_optim = bnb.optim.Adam8bit(
         optimizer_grouped_parameters,
-        betas=(training_args.adam_beta1, training_args.adam_beta2),
-        eps=training_args.adam_epsilon,
-        lr=training_args.learning_rate,
+        betas=(adam_args.adam_beta1, adam_args.adam_beta2),
+        eps=adam_args.adam_epsilon,
+        lr=adam_args.learning_rate,
     )
     return adam_bnb_optim
 
@@ -185,8 +185,7 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
     return average_loss, wer_score
 
 def main():
-    
-    accelerator = Accelerator()
+    accelerator = Accelerator(mixed_precision="fp16")
 
     model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     print("Loading tokenizer")
@@ -232,32 +231,40 @@ def main():
         evaluation_strategy="epoch",
         num_train_epochs=num_epochs,
         gradient_checkpointing=True,
-        fp16=True,
+        # fp16=True,
         # save_steps=600,
         # max_steps = max_steps,
         # eval_steps=300 if not DRY_RUN else max_steps,
         logging_steps=20,
         learning_rate=5e-5,
         # warmup_steps=500,
-        push_to_hub=False,
-        optim="adamw_bnb_8bit",
+        # push_to_hub=False,
+        # optim="adamw_bnb_8bit",
         # torch_compile=True
         # auto_find_batch_size=True
-    ) 
+    )
+    adam_args={}
+    adam_args["weight_decay"] = training_args.weight_decay
+    print(adam_args)
+    adam_args["adam_beta1"] = training_args.adam_beta1
+    adam_args["adam_beta2"] = training_args.adam_beta2
+    adam_args["adam_adam_epsilon"] = training_args.adam_epsilon
+    adam_args["learning_rate"] = training_args.learning_rate
+    print(adam_args)
+
     print("Setting Trainer")
 # Instead of directly passing 'dataset' to DataLoader, pass dataset['train'] or dataset['test']
     
-
-    # optimizer = get_adam8_bit(training_args, model)
-    optimizer = AdamW(model.parameters(), lr=training_args.learning_rate)
+    optimizer = get_adam8_bit(adam_args, model)
+    # optimizer = AdamW(model.parameters(), lr=5e-5)
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
-    total_steps_per_epoch = train_samples_len // training_args.train_batch_size
-    if train_samples_len % training_args.train_batch_size != 0:
+    total_steps_per_epoch = train_samples_len // 4
+    if train_samples_len % 4 != 0:
         total_steps_per_epoch += 1
 
     # Calculate the total training steps for all epochs
-    total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
+    total_training_steps = total_steps_per_epoch * 2
 
     data_collator = DataCollatorCTCWithPadding(processor=processor, accelerator=accelerator, input_key=MODEL_CONFIG['input_key'], padding=True)
     wer_metric = load_metric("wer", trust_remote_code=True)
@@ -267,7 +274,7 @@ def main():
         model = Trainer(
         model=model,
         data_collator=data_collator,
-        args=training_args,
+        args= None,
         compute_metrics=compute_metric,
         train_dataset= dataset["train"],
         eval_dataset=dataset["test"],
@@ -280,17 +287,17 @@ def main():
 
     else:
         dataloaders = {
-            'train': DataLoader(dataset['train'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator),
-            'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator)
+            'train': DataLoader(dataset['train'], batch_size=4, collate_fn=data_collator),
+            'test': DataLoader(dataset['test'], batch_size=4, collate_fn=data_collator)
         }
 
         
         dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
             dataloaders['train'],  dataloaders['test'], model, optimizer
         )
-        progress_bar = tqdm(range(train_samples_len // training_args.train_batch_size), desc="Training")
+        progress_bar = tqdm(range(train_samples_len // 4), desc="Training")
 
-        for epoch in range(training_args.num_train_epochs):
+        for epoch in range(2):
             model.train()
             # Loop over the number of epochs
             for step, batch in enumerate(dataloaders['train'], start=1):
@@ -305,7 +312,7 @@ def main():
                     # This condition is adjusted to reflect the current position within the epoch
                     current_global_step = step + epoch * total_steps_per_epoch
                     progress_bar.update(1)
-                    progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
+                    progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{2}")
 
                     # Evaluate at the end of each epoch
                     if current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
