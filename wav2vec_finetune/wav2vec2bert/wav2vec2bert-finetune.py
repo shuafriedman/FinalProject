@@ -186,7 +186,7 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
     return average_loss, wer_score
 
 def main():
-    accelerator = Accelerator(mixed_precision="fp16")
+    accelerator = Accelerator(mixed_precision="no")
 
     model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     print("Loading tokenizer")
@@ -224,42 +224,17 @@ def main():
         max_steps= num_epochs * train_samples_len / batch_size / gradient_accumulation
     else:
         max_steps=128
-    training_args = TrainingArguments(
-        output_dir= './',
-        group_by_length=True,
-        per_device_train_batch_size= batch_size,
-        gradient_accumulation_steps=gradient_accumulation,
-        evaluation_strategy="epoch",
-        num_train_epochs=num_epochs,
-        gradient_checkpointing=True,
-        # fp16=True,
-        # save_steps=600,
-        # max_steps = max_steps,
-        # eval_steps=300 if not DRY_RUN else max_steps,
-        logging_steps=20,
-        learning_rate=5e-5,
-        # warmup_steps=500,
-        # push_to_hub=False,
-        # optim="adamw_bnb_8bit",
-        # torch_compile=True
-        # auto_find_batch_size=True
-    )
-    adam_args={}
-    # adam_args["weight_decay"] = training_args.weight_decay
-    adam_args["weight_decay"] = 0.01
-
-    print(adam_args)
-    adam_args["adam_beta1"] = training_args.adam_beta1
-    adam_args["adam_beta2"] = training_args.adam_beta2
-    adam_args["adam_epsilon"] = training_args.adam_epsilon
-    adam_args["learning_rate"] = training_args.learning_rate
-    print(adam_args)
 
     print("Setting Trainer")
 # Instead of directly passing 'dataset' to DataLoader, pass dataset['train'] or dataset['test']
     
-    optimizer = get_adam8_bit(adam_args, model)
+    # optimizer = get_adam8_bit(adam_args, model)
+
+    optimizer = bnb.optim.Adam8bit(model.parameters(), lr=0.001, betas=(0.9, 0.995)) # add bnb optimizer
     # optimizer = AdamW(model.parameters(), lr=5e-5)
+
+    #TODO add learning rate scheduler
+
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
     total_steps_per_epoch = train_samples_len // 4
@@ -273,59 +248,45 @@ def main():
     wer_metric = load_metric("wer", trust_remote_code=True)
     compute_metric= compute_metrics_custom(wer_metric, processor)
 
-    if USE_TRAINER:
-        model = Trainer(
-        model=model,
-        data_collator=data_collator,
-        args= None,
-        compute_metrics=compute_metric,
-        train_dataset= dataset["train"],
-        eval_dataset=dataset["test"],
-        tokenizer=processor.feature_extractor,
-        # optimizers=(optimizer, None)
-        )
-        print("Beginning Training")
+    dataloaders = {
+        'train': DataLoader(dataset['train'], batch_size=4, collate_fn=data_collator),
+        'test': DataLoader(dataset['test'], batch_size=4, collate_fn=data_collator)
+    }
+
+    model.gradient_checkpointing_enable()
+    
+    dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
+        dataloaders['train'],  dataloaders['test'], model, optimizer
+    )
+    progress_bar = tqdm(range(train_samples_len // 4), desc="Training")
+    
+    
+    for epoch in range(2):
         model.train()
-        model.save_model(f"{model_path}-finetuned")
+        # Loop over the number of epochs
+        for step, batch in enumerate(dataloaders['train'], start=1):
+            with accelerator.accumulate(model):
+                for key in batch:
+                    if batch[key].dtype == torch.float16:
+                        batch[key] = batch[key].to(torch.float32)
+                loss = model(**batch).loss
+                accelerator.backward(loss)
+                optimizer.step()
+                optimizer.zero_grad()
+                # This condition is adjusted to reflect the current position within the epoch
+                current_global_step = step + epoch * total_steps_per_epoch
+                progress_bar.update(1)
+                progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{2}")
 
-    else:
-        dataloaders = {
-            'train': DataLoader(dataset['train'], batch_size=4, collate_fn=data_collator),
-            'test': DataLoader(dataset['test'], batch_size=4, collate_fn=data_collator)
-        }
+                # Evaluate at the end of each epoch
+                if current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
+                    eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
+                    logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
 
-        
-        dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
-            dataloaders['train'],  dataloaders['test'], model, optimizer
-        )
-        progress_bar = tqdm(range(train_samples_len // 4), desc="Training")
+        progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
 
-        for epoch in range(2):
-            model.train()
-            # Loop over the number of epochs
-            for step, batch in enumerate(dataloaders['train'], start=1):
-                with accelerator.accumulate(model):
-                    for key in batch:
-                        if batch[key].dtype == torch.float16:
-                            batch[key] = batch[key].to(torch.float32)
-                    loss = model(**batch).loss
-                    accelerator.backward(loss)
-                    optimizer.step()
-                    optimizer.zero_grad()
-                    # This condition is adjusted to reflect the current position within the epoch
-                    current_global_step = step + epoch * total_steps_per_epoch
-                    progress_bar.update(1)
-                    progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{2}")
-
-                    # Evaluate at the end of each epoch
-                    if current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
-                        eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
-                        logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
-
-            progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
-
-        progress_bar.close()
-        print("Finished Training")
-        model.save_pretrained(f"{model_path}-finetuned")
+    progress_bar.close()
+    print("Finished Training")
+    model.save_pretrained(f"{model_path}-finetuned")
 if __name__=='__main__':
    main()
