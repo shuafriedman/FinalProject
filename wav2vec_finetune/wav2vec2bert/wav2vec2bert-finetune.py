@@ -1,5 +1,6 @@
 import torch
-import bitsandbytes as bnb
+# import bitsandbytes as bnb
+from torch.optim import AdamW
 from torch import nn
 from transformers.trainer_pt_utils import get_parameter_names
 
@@ -184,6 +185,9 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
     return average_loss, wer_score
 
 def main():
+    
+    accelerator = Accelerator()
+
     model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     print("Loading tokenizer")
     print("Loading Processor")
@@ -212,7 +216,6 @@ def main():
             pad_token_id=processor.tokenizer.pad_token_id,
             vocab_size=len(processor.tokenizer)
         )
-    print("Checking for cuda")
     print("Getting Training Args")
     batch_size = 4 if not DRY_RUN else 1
     gradient_accumulation = 4 if not DRY_RUN else 2
@@ -245,8 +248,8 @@ def main():
 # Instead of directly passing 'dataset' to DataLoader, pass dataset['train'] or dataset['test']
     
 
-    optimizer = get_adam8_bit(training_args, model)
-
+    # optimizer = get_adam8_bit(training_args, model)
+    optimizer = AdamW(model.parameters(), lr=training_args.learning_rate)
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
     total_steps_per_epoch = train_samples_len // training_args.train_batch_size
@@ -255,7 +258,6 @@ def main():
 
     # Calculate the total training steps for all epochs
     total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
-    accelerator = Accelerator()
 
     data_collator = DataCollatorCTCWithPadding(processor=processor, accelerator=accelerator, input_key=MODEL_CONFIG['input_key'], padding=True)
     wer_metric = load_metric("wer", trust_remote_code=True)
