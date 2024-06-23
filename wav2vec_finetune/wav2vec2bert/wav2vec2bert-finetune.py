@@ -266,7 +266,6 @@ def main():
             model.gradient_checkpointing_enable()
         for epoch in range(training_args.num_train_epochs):
             model.train()
-            # Loop over the number of epochs
             for step, batch in enumerate(dataloaders['train'], start=1):
                 loss = model(**batch).loss
                 loss = loss / training_args.gradient_accumulation_steps
