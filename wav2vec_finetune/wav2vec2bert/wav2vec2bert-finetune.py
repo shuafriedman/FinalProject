@@ -9,7 +9,7 @@ import sys
 import pathlib
 import subprocess
 from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC, AutoProcessor, AutoFeatureExtractor, AutoTokenizer, AutoModel
-from transformers import Trainer
+from transformers import Trainer, get_linear_schedule_with_warmup
 #import load_metric
 from datasets import load_metric, DatasetDict, load_from_disk, load_dataset
 from config import *
@@ -298,7 +298,7 @@ def main():
         total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
 
         if training_args.max_train_steps is None:
-            max_train_steps = training_args.num_train_epochs * num_update_steps_per_epoch
+            max_train_steps = training_args.num_train_epochs * total_training_steps
 
         lr_scheduler = get_linear_schedule_with_warmup(
             optimizer=optimizer,
