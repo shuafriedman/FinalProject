@@ -52,7 +52,7 @@ class DataCollatorCTCWithPadding:
         batch["labels"] = labels
         return batch
 class CustomTrainingArguements:
-    def __init__(self, output_dir, group_by_length, per_device_train_batch_size, gradient_accumulation_steps, evaluation_strategy, num_train_epochs, gradient_checkpointing, fp16, logging_steps, learning_rate, push_to_hub, optim):
+    def __init__(self, output_dir, group_by_length, per_device_train_batch_size, gradient_accumulation_steps, evaluation_strategy, num_train_epochs, gradient_checkpointing, fp16, logging_steps, learning_rate):
         self.output_dir = output_dir
         self.group_by_length = group_by_length
         self.per_device_train_batch_size = per_device_train_batch_size
@@ -63,14 +63,29 @@ class CustomTrainingArguements:
         self.fp16 = fp16
         self.logging_steps = logging_steps
         self.learning_rate = learning_rate
-        self.push_to_hub = push_to_hub
-        self.optim = optim
     def __setattr__(self, name: str, value: Any) -> None:
         self.__dict__[name] = value
+    
     def __getattr__(self, name: str) -> Any:
-        return self.__dict__[name]
+        if name in self.__dict__:
+            return self.__dict__[name]
+        raise AttributeError(f"'CustomTrainingArguments' object has no attribute '{name}'")
+    
     def __delattr__(self, name: str) -> None:
-        del self.__dict__[name]
+        if name in self.__dict__:
+            del self.__dict__[name]
+        else:
+            raise AttributeError(f"'CustomTrainingArguments' object has no attribute '{name}'")
+    
+    def __getitem__(self, key: str) -> Any:
+        return self.__dict__[key]
+    
+    def __setitem__(self, key: str, value: Any) -> None:
+        self.__dict__[key] = value
+    
+    def __delitem__(self, key: str) -> None:
+        del self.__dict__[key]
+
         
 def compute_metrics_custom(wer_metric, processor):
     def compute_metric(pred, ):
@@ -239,27 +254,18 @@ def main():
         learning_rate=5e-5,
         # warmup_steps=500,
         push_to_hub=False,
-        optim="adamw_bnb_8bit",
         # torch_compile=True
         # auto_find_batch_size=True
     ) 
     print("Setting Trainer")
     
-    total_batch_size = training_args.per_device_train_batch_size * accelerator.num_processes
     
     adam_args= {"adam_beta1": 0.9, "adam_beta2": 0.999,  "adam_epsilon": 1e-8, "weight_decay" : 0.0, "learning_rate": training_args.learning_rate}
-
-    optimizer = get_adam8_bit(training_args, model)
+    optimizer = get_adam8_bit(adam_args, model)
 
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
-    total_steps_per_epoch = train_samples_len // total_batch_size
-    if train_samples_len % training_args.train_batch_size != 0:
-        total_steps_per_epoch += 1
-
-    # Calculate the total training steps for all epochs
-    total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
-
+    
     if USE_TRAINER:
         model = Trainer(
         model=model,
@@ -284,7 +290,14 @@ def main():
         dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
             dataloaders['train'],  dataloaders['test'], model, optimizer
         )
-        progress_bar = tqdm(range(train_samples_len // training_args.train_batch_size), desc="Training")
+
+        total_batch_size = training_args.per_device_train_batch_size * accelerator.num_processes
+        total_steps_per_epoch = train_samples_len // total_batch_size
+        if train_samples_len % total_batch_size != 0:
+            total_steps_per_epoch += 1
+        total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
+
+        progress_bar = tqdm(range(total_steps_per_epoch), desc="Training")
         if training_args.gradient_checkpointing:
             model.gradient_checkpointing_enable()
         for epoch in range(training_args.num_train_epochs):
