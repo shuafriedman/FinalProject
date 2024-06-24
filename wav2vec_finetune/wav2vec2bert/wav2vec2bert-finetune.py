@@ -52,7 +52,7 @@ class DataCollatorCTCWithPadding:
         batch["labels"] = labels
         return batch
 class CustomTrainingArguements:
-    def __init__(self, output_dir, group_by_length, per_device_train_batch_size, gradient_accumulation_steps, evaluation_strategy, num_train_epochs, gradient_checkpointing, fp16, logging_steps, learning_rate):
+    def __init__(self, output_dir, group_by_length, per_device_train_batch_size, gradient_accumulation_steps, evaluation_strategy, num_train_epochs, gradient_checkpointing, fp16, logging_steps, learning_rate, max_train_steps):
         self.output_dir = output_dir
         self.group_by_length = group_by_length
         self.per_device_train_batch_size = per_device_train_batch_size
@@ -63,6 +63,7 @@ class CustomTrainingArguements:
         self.fp16 = fp16
         self.logging_steps = logging_steps
         self.learning_rate = learning_rate
+        self.max_train_steps=max_train_steps
     def __setattr__(self, name: str, value: Any) -> None:
         self.__dict__[name] = value
     
@@ -254,11 +255,12 @@ def main():
         learning_rate=5e-5,
         # warmup_steps=500,
         push_to_hub=False,
+        max_train_steps= None
         # torch_compile=True
         # auto_find_batch_size=True
     ) 
     print("Setting Trainer")
-    
+
     
     adam_args= {"adam_beta1": 0.9, "adam_beta2": 0.999,  "adam_epsilon": 1e-8, "weight_decay" : 0.0, "learning_rate": training_args.learning_rate}
     optimizer = get_adam8_bit(adam_args, model)
@@ -286,10 +288,8 @@ def main():
             'train': DataLoader(dataset['train'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count()),
             'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count())
         }
+
         accelerator = Accelerator(mixed_precision= "fp16" if torch.cuda.is_available() else "no")
-        dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
-            dataloaders['train'],  dataloaders['test'], model, optimizer
-        )
 
         total_batch_size = training_args.per_device_train_batch_size * accelerator.num_processes
         total_steps_per_epoch = train_samples_len // total_batch_size
@@ -297,6 +297,17 @@ def main():
             total_steps_per_epoch += 1
         total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
 
+        if training_args.max_train_steps is None:
+            max_train_steps = training_args.num_train_epochs * num_update_steps_per_epoch
+
+        lr_scheduler = get_linear_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=100, #20
+            num_training_steps=max_train_steps
+        )
+        dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
+            dataloaders['train'],  dataloaders['test'], model, optimizer
+        )
         progress_bar = tqdm(range(total_steps_per_epoch), desc="Training")
         if training_args.gradient_checkpointing:
             model.gradient_checkpointing_enable()
