@@ -9,7 +9,7 @@ import sys
 import pathlib
 import subprocess
 from transformers import Wav2Vec2BertProcessor, Wav2Vec2BertForCTC, AutoProcessor, AutoFeatureExtractor, AutoTokenizer, AutoModel
-from transformers import Trainer
+from transformers import Trainer, get_linear_schedule_with_warmup
 #import load_metric
 from datasets import load_metric, DatasetDict, load_from_disk, load_dataset
 from config import *
@@ -254,7 +254,6 @@ def main():
         logging_steps=20,
         learning_rate=5e-5,
         # warmup_steps=500,
-        push_to_hub=False,
         max_train_steps= None
         # torch_compile=True
         # auto_find_batch_size=True
@@ -298,7 +297,7 @@ def main():
         total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
 
         if training_args.max_train_steps is None:
-            max_train_steps = training_args.num_train_epochs * num_update_steps_per_epoch
+            max_train_steps = training_args.num_train_epochs * total_training_steps
 
         lr_scheduler = get_linear_schedule_with_warmup(
             optimizer=optimizer,
@@ -320,7 +319,6 @@ def main():
                 if step % training_args.gradient_accumulation_steps == 0 or step == total_steps_per_epoch:
                     optimizer.step()
                     optimizer.zero_grad()
-
                 # This condition is adjusted to reflect the current position within the epoch
                 current_global_step = step + epoch * total_steps_per_epoch
                 progress_bar.update(1)
