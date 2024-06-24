@@ -2,7 +2,7 @@ import torch
 import bitsandbytes as bnb
 from torch import nn
 from transformers.trainer_pt_utils import get_parameter_names
-
+import math
 import datasets
 import os
 import sys
@@ -92,30 +92,30 @@ def load_dataset_from_disk():
         dataset = DatasetDict({"train": small_train_subset, "test": small_test_subset})
     return dataset, train_samples_len
 
-def get_adam8_bit(training_args, model):
+def get_adam8_bit(adam_args, model):
     decay_parameters = get_parameter_names(model, [nn.LayerNorm])
     decay_parameters = [name for name in decay_parameters if "bias" not in name]
     optimizer_grouped_parameters = [
         {
             "params": [p for n, p in model.named_parameters() if n in decay_parameters],
-            "weight_decay": training_args.weight_decay,
+            "weight_decay": adam_args["weight_decay"],
         },
         {
             "params": [p for n, p in model.named_parameters() if n not in decay_parameters],
-            "weight_decay": 0.0,
+            "weight_decay": adam_args["weight_decay"],
         },
     ]
 
     optimizer_kwargs = {
-        "betas": (training_args.adam_beta1, training_args.adam_beta2),
-        "eps": training_args.adam_epsilon,
+        "betas": (adam_args["adam_beta1"], adam_args["adam_beta2"]),
+        "eps": adam_args["adam_epsilon"],
     }
-    optimizer_kwargs["lr"] = training_args.learning_rate
+    optimizer_kwargs["lr"] = adam_args["learning_rate"]
     adam_bnb_optim = bnb.optim.Adam8bit(
         optimizer_grouped_parameters,
-        betas=(training_args.adam_beta1, training_args.adam_beta2),
-        eps=training_args.adam_epsilon,
-        lr=training_args.learning_rate,
+        betas=(adam_args["adam_beta1"], adam_args["adam_beta2"]),
+        eps=adam_args["adam_epsilon"],
+        lr=adam_args["learning_rate"],
     )
     return adam_bnb_optim
 
@@ -160,6 +160,13 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
     return average_loss, wer_score
 
 def main():
+    batch_size = 16 if not DRY_RUN else 1
+    gradient_accumulation_steps = 2 if not DRY_RUN else 1
+    num_train_epochs = 2 if not DRY_RUN else 1
+    learning_rate=1e-5
+    max_train_steps=None
+    gradient_checkpointing = True
+    
     model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     print("Loading tokenizer")
     print("Loading Processor")
@@ -192,99 +199,85 @@ def main():
             pad_token_id=processor.tokenizer.pad_token_id,
             vocab_size=len(processor.tokenizer)
         )
-    print("Checking for cuda")
-    fp16= "True" if torch.cuda.is_available() else False
-    print("Getting Training Args")
-    batch_size = 4 if not DRY_RUN else 1
-    gradient_accumulation = 4 if not DRY_RUN else 2
-    num_epochs = 3 if not DRY_RUN else 1
-    if train_samples_len:
-        max_steps= num_epochs * train_samples_len / batch_size / gradient_accumulation
-    else:
-        max_steps=128
-    training_args = TrainingArguments(
-        output_dir= './',
-        group_by_length=True,
-        per_device_train_batch_size= batch_size,
-        gradient_accumulation_steps=gradient_accumulation,
-        evaluation_strategy="epoch",
-        num_train_epochs=num_epochs,
-        gradient_checkpointing=True,
-        fp16=fp16,
-        # save_steps=600,
-        # max_steps = max_steps,
-        # eval_steps=300 if not DRY_RUN else max_steps,
-        logging_steps=20,
-        learning_rate=5e-5,
-        # warmup_steps=500,
-        push_to_hub=False,
-        optim="adamw_bnb_8bit",
-        # torch_compile=True
-        # auto_find_batch_size=True
-    ) 
-    print("Setting Trainer")
+    
+    max_steps= num_train_epochs * train_samples_len / batch_size / gradient_accumulation_steps
+    # training_args = TrainingArguments(
+    #     output_dir= './',
+    #     group_by_length=True,
+    #     per_device_train_batch_size= batch_size,
+    #     gradient_accumulation_steps=gradient_accumulation,
+    #     evaluation_strategy="epoch",
+    #     num_train_epochs=num_epochs,
+    #     gradient_checkpointing=True,
+    #     fp16=fp16,
+    #     # save_steps=600,
+    #     # max_steps = max_steps,
+    #     # eval_steps=300 if not DRY_RUN else max_steps,
+    #     logging_steps=20,
+    #     learning_rate=5e-5,
+    #     # warmup_steps=500,
+    #     push_to_hub=False,
+    #     optim="adamw_bnb_8bit",
+    #     # torch_compile=True
+    #     # auto_find_batch_size=True
+    # ) 
+    # print("Setting Trainer")
 # Instead of directly passing 'dataset' to DataLoader, pass dataset['train'] or dataset['test']
     
+    adam_args= {"adam_beta1": 0.9, "adam_beta2": 0.999,  "adam_epsilon": 1e-8, "weight_decay" : 0.0, "learning_rate": learning_rate}
 
-    optimizer = get_adam8_bit(training_args, model)
+    optimizer = get_adam8_bit(adam_args, model)
 
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
-    total_steps_per_epoch = train_samples_len // training_args.train_batch_size
-    if train_samples_len % training_args.train_batch_size != 0:
+    total_steps_per_epoch = train_samples_len // batch_size
+    if train_samples_len % batch_size != 0:
         total_steps_per_epoch += 1
 
     # Calculate the total training steps for all epochs
-    total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
+    total_training_steps = total_steps_per_epoch * num_train_epochs
+    dataloaders = {
+        'train': DataLoader(dataset['train'], batch_size=batch_size, collate_fn=data_collator),
+        'test': DataLoader(dataset['test'], batch_size=batch_size, collate_fn=data_collator)
+    }
+    accelerator = Accelerator(mixed_precision= "fp16" if torch.cuda.is_available() else "no")
+    dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
+        dataloaders['train'],  dataloaders['test'], model, optimizer
+    )
+    
+    num_update_steps_per_epoch = math.ceil(len(dataloaders["train"]) / gradient_accumulation_steps)
 
-    if USE_TRAINER:
-        model = Trainer(
-        model=model,
-        data_collator=data_collator,
-        args=training_args,
-        compute_metrics=compute_metric,
-        train_dataset= dataset["train"],
-        eval_dataset=dataset["test"],
-        tokenizer=processor.feature_extractor,
-        # optimizers=(optimizer, None)
-        )
-        print("Beginning Training")
+    if max_train_steps is None:
+        max_train_steps = num_train_epochs * num_update_steps_per_epoch
+
+    total_batch_size = batch_size * accelerator.num_processes * gradient_accumulation_steps
+
+    progress_bar = tqdm(range(train_samples_len // total_batch_size), desc="Training", disable=not accelerator.is_local_main_process)
+    
+    if gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        
+    for epoch in range(num_train_epochs):
         model.train()
-        model.save_model(f"{model_path}-finetuned")
+        for step, batch in enumerate(dataloaders['train'], start=1):
+            loss = model(**batch).loss
+            loss = loss / gradient_accumulation_steps
+            accelerator.backward(loss)
+            if step % gradient_accumulation_steps == 0 or step == total_steps_per_epoch:
+                optimizer.step()
+                optimizer.zero_grad()
 
-    else:
-        dataloaders = {
-            'train': DataLoader(dataset['train'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count()),
-            'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count())
-        }
-        accelerator = Accelerator(mixed_precision= "fp16" if torch.cuda.is_available() else "no")
-        dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
-            dataloaders['train'],  dataloaders['test'], model, optimizer
-        )
-        progress_bar = tqdm(range(train_samples_len // training_args.train_batch_size), desc="Training")
-        if training_args.gradient_checkpointing:
-            model.gradient_checkpointing_enable()
-        for epoch in range(training_args.num_train_epochs):
-            model.train()
-            for step, batch in enumerate(dataloaders['train'], start=1):
-                loss = model(**batch).loss
-                loss = loss / training_args.gradient_accumulation_steps
-                accelerator.backward(loss)
-                if step % training_args.gradient_accumulation_steps == 0 or step == total_steps_per_epoch:
-                    optimizer.step()
-                    optimizer.zero_grad()
+            # This condition is adjusted to reflect the current position within the epoch
+            current_global_step = step + epoch * total_steps_per_epoch
+            progress_bar.update(1)
+            progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{num_train_epochs}")
 
-                # This condition is adjusted to reflect the current position within the epoch
-                current_global_step = step + epoch * total_steps_per_epoch
-                progress_bar.update(1)
-                progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
+            # Evaluate at the end of each epoch
+            if current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
+                eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
+                logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
 
-                # Evaluate at the end of each epoch
-                if current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
-                    eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
-                    logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
-
-            progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
+        progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
 
         progress_bar.close()
         print("Finished Training")
