@@ -92,30 +92,30 @@ def load_dataset_from_disk():
         dataset = DatasetDict({"train": small_train_subset, "test": small_test_subset})
     return dataset, train_samples_len
 
-def get_adam8_bit(training_args, model):
+def get_adam8_bit(adam_args, model):
     decay_parameters = get_parameter_names(model, [nn.LayerNorm])
     decay_parameters = [name for name in decay_parameters if "bias" not in name]
     optimizer_grouped_parameters = [
         {
             "params": [p for n, p in model.named_parameters() if n in decay_parameters],
-            "weight_decay": training_args.weight_decay,
+            "weight_decay": adam_args["weight_decay"],
         },
         {
             "params": [p for n, p in model.named_parameters() if n not in decay_parameters],
-            "weight_decay": 0.0,
+            "weight_decay": adam_args["weight_decay"],
         },
     ]
 
     optimizer_kwargs = {
-        "betas": (training_args.adam_beta1, training_args.adam_beta2),
-        "eps": training_args.adam_epsilon,
+        "betas": (adam_args["adam_beta1"], adam_args["adam_beta2"]),
+        "eps": adam_args["adam_epsilon"],
     }
-    optimizer_kwargs["lr"] = training_args.learning_rate
+    optimizer_kwargs["lr"] = adam_args["learning_rate"]
     adam_bnb_optim = bnb.optim.Adam8bit(
         optimizer_grouped_parameters,
-        betas=(training_args.adam_beta1, training_args.adam_beta2),
-        eps=training_args.adam_epsilon,
-        lr=training_args.learning_rate,
+        betas=(adam_args["adam_beta1"], adam_args["adam_beta2"]),
+        eps=adam_args["adam_epsilon"],
+        lr=adam_args["learning_rate"],
     )
     return adam_bnb_optim
 
@@ -160,6 +160,7 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
     return average_loss, wer_score
 
 def main():
+    learning_rate=5e-5
     model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     print("Loading tokenizer")
     print("Loading Processor")
@@ -225,8 +226,8 @@ def main():
     print("Setting Trainer")
 # Instead of directly passing 'dataset' to DataLoader, pass dataset['train'] or dataset['test']
     
-
-    optimizer = get_adam8_bit(training_args, model)
+    adam_args= {"adam_beta1": 0.9, "adam_beta2": 0.999, "adam_epsilon": 1e-8, "weight_decay" : 0.0, "learning_rate": learning_rate}
+    optimizer = get_adam8_bit(adam_args, model)
 
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
