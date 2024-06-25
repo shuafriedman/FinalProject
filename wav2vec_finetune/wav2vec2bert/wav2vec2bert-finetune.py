@@ -2,6 +2,7 @@ import torch
 import bitsandbytes as bnb
 from torch import nn
 from transformers.trainer_pt_utils import get_parameter_names
+import itertools
 
 import datasets
 import os
@@ -114,6 +115,18 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
     # Return both loss and WER
     return average_loss, wer_score
 
+def log_gradients(model, when):
+    total_norm = 0.0
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            param_norm = param.grad.data.norm(2)
+            total_norm += param_norm.item() ** 2
+        else:
+            print(f"{when} No gradient for {name}")
+    total_norm = total_norm ** 0.5
+    print(f"{when} Total grad norm: {total_norm:.4f}")
+
+
 def main():
     model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     print("Loading tokenizer")
@@ -149,8 +162,8 @@ def main():
     print("Checking for cuda")
     fp16= "True" if torch.cuda.is_available() else False
     print("Getting Training Args")
-    batch_size = 4 if not DRY_RUN else 1
-    gradient_accumulation = 4 if not DRY_RUN else 2
+    batch_size = 8 if not DRY_RUN else 1
+    gradient_accumulation = 2 if not DRY_RUN else 2
     num_epochs = 2 if not DRY_RUN else 1
     # if train_samples_len:
     #     max_steps= num_epochs * train_samples_len / batch_size / gradient_accumulation
@@ -168,7 +181,7 @@ def main():
         max_steps = max_steps,
         # eval_steps=300 if not DRY_RUN else max_steps,
         logging_steps=20,
-        learning_rate=5e-5
+        learning_rate=5e-5 / 4
         # warmup_steps=500,
         # torch_compile=True
         # auto_find_batch_size=True
@@ -204,17 +217,34 @@ def main():
         dataloaders['train'],  dataloaders['test'], model, optimizer
     )
     progress_bar = tqdm(range(train_samples_len // training_args.train_batch_size), desc="Training")
+        
+    start_batch = 1
+    # progress_bar = tqdm(range(start_batch, total_steps_per_epoch), desc="Training", initial=start_batch)
+
     if training_args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
     for epoch in range(training_args.num_train_epochs):
         model.train()
-        for step, batch in enumerate(dataloaders['train'], start=1):
-            loss = model(**batch).loss
+        for step, batch in enumerate(itertools.islice(dataloaders['train'], start_batch, total_steps_per_epoch), start=start_batch):
+            outputs = model(**batch)
+            loss = outputs.loss
+            logger.info(loss)
             loss = loss / training_args.gradient_accumulation_steps
+            logger.info(loss)
             accelerator.backward(loss)
+            log_gradients(model, "Before Clipping")
+
             if step % training_args.gradient_accumulation_steps == 0 or step == total_steps_per_epoch:
+                logger.info("HERE")
+                accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                log_gradients(model, "After Clipping")
+
                 optimizer.step()
                 optimizer.zero_grad()
+
+            if torch.isnan(loss).any() or torch.isinf(loss).any():
+                print(f"NaN or Inf detected in loss at step {step}, epoch {epoch}")
+                break
             progress_bar.update(1)
             progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
 
@@ -224,7 +254,9 @@ def main():
             if current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
                 eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
                 logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
-
+            
+        if torch.isnan(loss).any() or torch.isinf(loss).any():
+            break
         progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
 
     progress_bar.close()
