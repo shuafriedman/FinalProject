@@ -180,8 +180,8 @@ def main():
         # save_steps=600,
         max_steps = max_steps,
         # eval_steps=300 if not DRY_RUN else max_steps,
-        logging_steps=20,
-        learning_rate=5e-5 / 4
+        logging_steps=50,
+        learning_rate=5e-5,
         # warmup_steps=500,
         # torch_compile=True
         # auto_find_batch_size=True
@@ -218,14 +218,13 @@ def main():
     )
     progress_bar = tqdm(range(train_samples_len // training_args.train_batch_size), desc="Training")
         
-    start_batch = 1
-    # progress_bar = tqdm(range(start_batch, total_steps_per_epoch), desc="Training", initial=start_batch)
-
     if training_args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
+        
+    model.config.ctc_zero_infinity = True
     for epoch in range(training_args.num_train_epochs):
         model.train()
-        for step, batch in enumerate(itertools.islice(dataloaders['train'], start_batch, total_steps_per_epoch), start=start_batch):
+        for step, batch in enumerate(dataloaders['train'], start=1):
             outputs = model(**batch)
             loss = outputs.loss
             logger.info(loss)
@@ -242,16 +241,17 @@ def main():
                 optimizer.step()
                 optimizer.zero_grad()
 
+            progress_bar.update(1)
+            progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
+
             if torch.isnan(loss).any() or torch.isinf(loss).any():
                 print(f"NaN or Inf detected in loss at step {step}, epoch {epoch}")
                 break
-            progress_bar.update(1)
-            progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
 
             # Evaluate at the end of each epoch
             current_global_step = step + epoch * total_steps_per_epoch
 
-            if current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
+            if current_global_step % training_args.logging_steps == 0 or current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
                 eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
                 logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
             
