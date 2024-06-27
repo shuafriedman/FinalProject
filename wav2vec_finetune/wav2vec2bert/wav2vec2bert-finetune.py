@@ -86,25 +86,27 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
 
     with torch.no_grad(), tqdm(dataloader, desc="Evaluating", leave=False) as tqdm_dataloader:
         for batch in tqdm_dataloader:
-            outputs = model(**batch)
-            loss = outputs.loss
-            total_loss += accelerator.gather(loss).item() * batch[MODEL_CONFIG['input_key']].size(0)
-            total_items += batch[MODEL_CONFIG['input_key']].size(0)
+            with torch.cuda.amp.autocast():
 
-            # Decode the predicted IDs to text
-            logits = outputs.logits
-            pred_ids = torch.argmax(logits, dim=-1)
-            batch_predictions = processor.batch_decode(pred_ids, skip_special_tokens=True)
-            predictions.extend(batch_predictions)
+                outputs = model(**batch)
+                loss = outputs.loss
+                total_loss += accelerator.gather(loss).item() * batch[MODEL_CONFIG['input_key']].size(0)
+                total_items += batch[MODEL_CONFIG['input_key']].size(0)
 
-            # Assuming labels are already IDs, decode them
-            # If your labels are in another format, you might need to adjust this
-            labels = batch["labels"]
-            labels[labels == -100] = processor.tokenizer.pad_token_id
-            batch_references = processor.batch_decode(labels, skip_special_tokens=True)
-            references.extend(batch_references)
+                # Decode the predicted IDs to text
+                logits = outputs.logits
+                pred_ids = torch.argmax(logits, dim=-1)
+                batch_predictions = processor.batch_decode(pred_ids, skip_special_tokens=True)
+                predictions.extend(batch_predictions)
 
-            tqdm_dataloader.set_description(f"Evaluating (Loss: {total_loss / total_items:.4f})")
+                # Assuming labels are already IDs, decode them
+                # If your labels are in another format, you might need to adjust this
+                labels = batch["labels"]
+                labels[labels == -100] = processor.tokenizer.pad_token_id
+                batch_references = processor.batch_decode(labels, skip_special_tokens=True)
+                references.extend(batch_references)
+
+                tqdm_dataloader.set_description(f"Evaluating (Loss: {total_loss / total_items:.4f})")
 
     # Compute WER
     wer_score = wer_metric.compute(predictions=predictions, references=references)
