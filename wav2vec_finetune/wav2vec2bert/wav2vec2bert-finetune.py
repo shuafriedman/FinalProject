@@ -159,6 +159,7 @@ def main():
             pad_token_id=processor.tokenizer.pad_token_id,
             vocab_size=len(processor.tokenizer)
         )
+    model.config.ctc_zero_infinity = True
     print("Checking for cuda")
     fp16= "True" if torch.cuda.is_available() else False
     print("Getting Training Args")
@@ -199,7 +200,7 @@ def main():
         'train': DataLoader(dataset['train'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count()),
         'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count())
     }
-    accelerator = Accelerator(mixed_precision="no", gradient_accumulation_steps=training_args.gradient_accumulation_steps)
+    accelerator = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=training_args.gradient_accumulation_steps)
 
     training_args.train_batch_size = training_args.per_device_train_batch_size * max(1, accelerator.num_processes) #from huggingface trainer args code
     total_steps_per_epoch = train_samples_len // training_args.train_batch_size
@@ -221,25 +222,25 @@ def main():
     if training_args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
         
-    model.config.ctc_zero_infinity = True
     for epoch in range(training_args.num_train_epochs):
         model.train()
         for step, batch in enumerate(dataloaders['train'], start=1):
-            outputs = model(**batch)
-            loss = outputs.loss
-            logger.info(loss)
-            loss = loss / training_args.gradient_accumulation_steps
-            logger.info(loss)
-            accelerator.backward(loss)
-            log_gradients(model, "Before Clipping")
+            with torch.cuda.amp.autocast():
+                outputs = model(**batch)
+                loss = outputs.loss
+                logger.info(loss)
+                loss = loss / training_args.gradient_accumulation_steps
+                logger.info(loss)
+                accelerator.backward(loss)
+                # log_gradients(model, "Before Clipping")
 
-            if step % training_args.gradient_accumulation_steps == 0 or step == total_steps_per_epoch:
-                logger.info("HERE")
-                accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                log_gradients(model, "After Clipping")
+                if step % training_args.gradient_accumulation_steps == 0 or step == total_steps_per_epoch:
+                    logger.info("HERE")
+                    accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    # log_gradients(model, "After Clipping")
 
-                optimizer.step()
-                optimizer.zero_grad()
+                    optimizer.step()
+                    optimizer.zero_grad()
 
             progress_bar.update(1)
             progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
