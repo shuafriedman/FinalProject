@@ -307,18 +307,17 @@ def main():
                         accelerator.save_state(output_dir)
             progress_bar.update(1)
             progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
-
-            if torch.isnan(loss).any() or torch.isinf(loss).any():
-                print(f"NaN or Inf detected in loss at step {step}, epoch {epoch}")
-                break
-
             # Evaluate at the end of each epoch
             current_global_step = step + epoch * total_steps_per_epoch
 
-            if current_global_step % training_args.logging_steps == 0 or current_global_step % total_steps_per_epoch == 0 or current_global_step == total_training_steps:
+            if current_global_step % training_args.logging_steps == 0:
                 eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
                 logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
-            
+        #evaluate if logging steps is None or if we are at the end of the last epoch
+        # if training_args.logging_steps == None or (epoch + 1 == training_args.num_train_epochs):    
+        eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
+        logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
+        
         if checkpointing_steps == "epoch":
             output_dir = f"{checkpoint_path}/epoch_{epoch}"
             if training_args.output_dir is not None:
