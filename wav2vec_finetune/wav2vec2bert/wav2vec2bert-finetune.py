@@ -42,9 +42,10 @@ def load_dataset_from_disk():
     train_samples_len=dataset['train'].num_rows
     if DRY_RUN:
         print("creating dataset for dry run")
-        small_train_subset = dataset['train'].select(range(128))
-        train_samples_len = 128
-        small_test_subset = dataset['test'].select(range(128)) 
+        samples = 32
+        small_train_subset = dataset['train'].select(range(samples))
+        train_samples_len = samples
+        small_test_subset = dataset['test'].select(range(samples)) 
         dataset = DatasetDict({"train": small_train_subset, "test": small_test_subset})
     return dataset, train_samples_len
 
@@ -193,7 +194,7 @@ def main():
         # save_steps=600,
         max_steps = max_steps,
         # eval_steps=300 if not DRY_RUN else max_steps,
-        logging_steps=50,
+        logging_steps=50 if not DRY_RUN else 16,
         learning_rate=5e-5,
         # warmup_steps=500,
         # torch_compile=True
@@ -283,7 +284,12 @@ def main():
             # After the first iteration though, we need to go back to the original dataloader
             active_dataloader = dataloaders["train"]
         for step, batch in enumerate(active_dataloader, start=1):
-            with torch.cuda.amp.autocast():
+            # if device is cpu, don't do autocast
+            if torch.cuda.is_available():
+                cast = torch.cuda.amp.autocast
+            else:
+                cast = torch.cuda.amp.autocast(enabled=False)
+            with cast():
                 outputs = model(**batch)
                 loss = outputs.loss
                 logger.info(loss)
