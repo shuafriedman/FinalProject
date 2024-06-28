@@ -130,6 +130,21 @@ def log_gradients(model, when):
 
 
 def main():
+    batch_size = 8 if not DRY_RUN else 1
+    gradient_accumulation = 2 if not DRY_RUN else 2
+    num_epochs = 2 if not DRY_RUN else 1
+    if hasattr(CHECKPOINTING_STEPS, "isdigit"):
+        if CHECKPOINTING_STEPS == "epoch":
+            checkpointing_steps = CHECKPOINTING_STEPS
+        elif CHECKPOINTING_STEPS.isdigit():
+            checkpointing_steps = int(CHECKPOINTING_STEPS)
+        else:
+            raise ValueError(
+                f"Argument `checkpointing_steps` must be either a number or `epoch`. `{CHECKPOINTING_STEPS}` passed."
+            )
+    else:
+        checkpointing_steps = None
+        
     model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     print("Loading tokenizer")
     print("Loading Processor")
@@ -142,7 +157,7 @@ def main():
     data_collator = DataCollatorCTCWithPadding(processor=processor, input_key=MODEL_CONFIG['input_key'], padding=True)
     wer_metric = load_metric("wer")
     print("Defining Model and Arguements")
-    if MANUALLY_SET_MODEL_CONFIG:
+    if RESUME_FROM_CHECKPOINT ==False or os.path.exists(f"{model_path}-finetuned/checkpoints"):
         model = MODEL_CONFIG['model'].from_pretrained(
             model_path,
             attention_dropout=0.0,
@@ -157,29 +172,24 @@ def main():
         )
     else:
         model=MODEL_CONFIG['model'].from_pretrained(
-            path,
+            f"{model_path}-finetuned",
             pad_token_id=processor.tokenizer.pad_token_id,
             vocab_size=len(processor.tokenizer)
         )
-    model.config.ctc_zero_infinity = True
-    print("Checking for cuda")
-    fp16= "True" if torch.cuda.is_available() else False
+    model.config.ctc_zero_infinity = True #necessary, data keeps giving inf in loss towards end of first epoch
     print("Getting Training Args")
-    batch_size = 8 if not DRY_RUN else 1
-    gradient_accumulation = 2 if not DRY_RUN else 2
-    num_epochs = 2 if not DRY_RUN else 1
+
     # if train_samples_len:
     #     max_steps= num_epochs * train_samples_len / batch_size / gradient_accumulation
     max_steps=None
     training_args = CustomTrainingArguements(
-        output_dir= './',
+        output_dir=f"{model_path}-finetuned",
         group_by_length=True,
         per_device_train_batch_size= batch_size,
         gradient_accumulation_steps=gradient_accumulation,
         evaluation_strategy="epoch",
         num_train_epochs=num_epochs,
         gradient_checkpointing=True,
-        fp16=fp16,
         # save_steps=600,
         max_steps = max_steps,
         # eval_steps=300 if not DRY_RUN else max_steps,
@@ -203,7 +213,7 @@ def main():
         'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count())
     }
     accelerator = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=training_args.gradient_accumulation_steps)
-
+    
     training_args.train_batch_size = training_args.per_device_train_batch_size * max(1, accelerator.num_processes) #from huggingface trainer args code
     total_steps_per_epoch = train_samples_len // training_args.train_batch_size
     if train_samples_len % training_args.train_batch_size != 0:
@@ -219,14 +229,60 @@ def main():
     dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
         dataloaders['train'],  dataloaders['test'], model, optimizer
     )
-    progress_bar = tqdm(range(train_samples_len // training_args.train_batch_size), desc="Training")
+    resume_step = None
+    overall_step = 0
+    starting_epoch = 0
+    if RESUME_FROM_CHECKPOINT:
+        if RESUME_FROM_SPECIFIC_CHECKPOINT:
+            checkpoint_path = f"{model_path}-finetuned/{RESUME_FROM_CHECKPOINT_DIR}/{RESUME_FROM_SPECIFIC_CHECKPOINT}"
+            accelerator.print(f"Resumed from checkpoint: {RESUME_FROM_SPECIFIC_CHECKPOINT}")
+            accelerator.load_state(checkpoint_path)
+            path = os.path.basename(checkpoint_path)
+        else:
+            checkpoint_path = f"{model_path}-finetuned/{RESUME_FROM_CHECKPOINT_DIR}"
+    # We also need to keep track of the stating epoch so files are named properly
+            # Get the most recent checkpoint
+            dirs = [f.name for f in os.scandir(checkpoint_path) if f.is_dir()]
+            dirs.sort(key=os.path.getctime)
+            latest_checkpoint_dir = dirs[-1]  # Most recent checkpoint is the last
+            latest_checkpoint_path = os.path.join(checkpoint_path, latest_checkpoint_dir)
+            accelerator.print(f"Resumed from latest checkpoint: {latest_checkpoint_path}")
+            accelerator.load_state(latest_checkpoint_path)
+            path = os.path.basename(latest_checkpoint_path)
+        # Extract `epoch_{i}` or `step_{i}`
+        training_difference = os.path.splitext(path)[0]
+
+        if "epoch" in training_difference:
+            starting_epoch = int(training_difference.replace("epoch_", "")) + 1
+            resume_step = None
+        else:
+            resume_step = int(training_difference.replace("step_", ""))
+            starting_epoch = resume_step // len(dataloaders['train'])
+            resume_step -= starting_epoch * len(dataloaders['train'])
+
+    # Initialize the progress bar correctly based on resume point
+    if resume_step is not None:
+        # Calculate total steps per epoch assuming `train_dataloader` is already defined
+        total_steps_per_epoch = len(dataloaders['train'])
+        initial_step = resume_step
+    else:
+        total_steps_per_epoch = len(dataloaders['train'])
+        initial_step = 0
+
+    progress_bar = tqdm(range(1, total_steps_per_epoch + 1), desc="Training", initial=initial_step)
         
     if training_args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
         
-    for epoch in range(training_args.num_train_epochs):
-        model.train()
-        for step, batch in enumerate(dataloaders['train'], start=1):
+    for epoch in range(starting_epoch, training_args.num_train_epochs):
+        if RESUME_FROM_CHECKPOINT and epoch == starting_epoch and resume_step is not None:
+            # We need to skip steps until we reach the resumed step
+            active_dataloader = accelerator.skip_first_batches(dataloaders["train"], resume_step)
+            overall_step += resume_step
+        else:
+            # After the first iteration though, we need to go back to the original dataloader
+            active_dataloader = dataloaders["train"]
+        for step, batch in enumerate(active_dataloader, start=1):
             with torch.cuda.amp.autocast():
                 outputs = model(**batch)
                 loss = outputs.loss
@@ -237,13 +293,18 @@ def main():
                 # log_gradients(model, "Before Clipping")
 
                 if step % training_args.gradient_accumulation_steps == 0 or step == total_steps_per_epoch:
-                    logger.info("HERE")
                     accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     # log_gradients(model, "After Clipping")
-
                     optimizer.step()
                     optimizer.zero_grad()
-
+                    
+                overall_step += 1
+                if isinstance(checkpointing_steps, int):
+                    output_dir = f"{checkpoint_path}/step_{overall_step}"
+                    if overall_step % checkpointing_steps == 0:
+                        if training_args.output_dir is not None:
+                            output_dir = os.path.join(training_args.output_dir, output_dir)
+                        accelerator.save_state(output_dir)
             progress_bar.update(1)
             progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
 
@@ -258,8 +319,11 @@ def main():
                 eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
                 logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
             
-        if torch.isnan(loss).any() or torch.isinf(loss).any():
-            break
+        if checkpointing_steps == "epoch":
+            output_dir = f"{checkpoint_path}/epoch_{epoch}"
+            if training_args.output_dir is not None:
+                output_dir = os.path.join(training_args.output_dir, output_dir)
+            accelerator.save_state(output_dir)
         progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
 
     progress_bar.close()
