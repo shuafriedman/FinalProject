@@ -88,7 +88,6 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
     with torch.no_grad(), tqdm(dataloader, desc="Evaluating", leave=False) as tqdm_dataloader:
         for batch in tqdm_dataloader:
             with torch.cuda.amp.autocast():
-
                 outputs = model(**batch)
                 loss = outputs.loss
                 total_loss += accelerator.gather(loss).item() * batch[MODEL_CONFIG['input_key']].size(0)
@@ -234,32 +233,44 @@ def main():
     overall_step = 0
     starting_epoch = 0
     if RESUME_FROM_CHECKPOINT:
-        if RESUME_FROM_SPECIFIC_CHECKPOINT:
-            checkpoint_path = f"{model_path}-finetuned/{RESUME_FROM_CHECKPOINT_DIR}/{RESUME_FROM_SPECIFIC_CHECKPOINT}"
-            accelerator.print(f"Resumed from checkpoint: {RESUME_FROM_SPECIFIC_CHECKPOINT}")
-            accelerator.load_state(checkpoint_path)
-            path = os.path.basename(checkpoint_path)
-        else:
-            checkpoint_path = f"{model_path}-finetuned/{RESUME_FROM_CHECKPOINT_DIR}"
-    # We also need to keep track of the stating epoch so files are named properly
-            # Get the most recent checkpoint
-            dirs = [f.name for f in os.scandir(checkpoint_path) if f.is_dir()]
-            dirs.sort(key=os.path.getctime)
-            latest_checkpoint_dir = dirs[-1]  # Most recent checkpoint is the last
-            latest_checkpoint_path = os.path.join(checkpoint_path, latest_checkpoint_dir)
-            accelerator.print(f"Resumed from latest checkpoint: {latest_checkpoint_path}")
-            accelerator.load_state(latest_checkpoint_path)
-            path = os.path.basename(latest_checkpoint_path)
-        # Extract `epoch_{i}` or `step_{i}`
-        training_difference = os.path.splitext(path)[0]
+        checkpoint_path = f"{model_path}-finetuned/{RESUME_FROM_CHECKPOINT_DIR}"
+        if os.path.exists(checkpoint_path) and any(os.scandir(checkpoint_path)):
+            if RESUME_FROM_SPECIFIC_CHECKPOINT:
+                checkpoint_path = os.path.join(checkpoint_path, RESUME_FROM_SPECIFIC_CHECKPOINT)
+                accelerator.print(f"Resumed from checkpoint: {RESUME_FROM_SPECIFIC_CHECKPOINT}")
+                accelerator.load_state(checkpoint_path)
+                path = os.path.basename(checkpoint_path)
+            else:
+                # Get the most recent checkpoint
+                dirs = [f.name for f in os.scandir(checkpoint_path) if f.is_dir()]
+                dirs.sort(key=lambda x: os.path.getmtime(os.path.join(checkpoint_path, x)))
+                if dirs:
+                    latest_checkpoint_dir = dirs[-1]  # Most recent checkpoint is the last
+                    latest_checkpoint_path = os.path.join(checkpoint_path, latest_checkpoint_dir)
+                    accelerator.print(f"Resumed from latest checkpoint: {latest_checkpoint_path}")
+                    accelerator.load_state(latest_checkpoint_path)
+                    path = os.path.basename(latest_checkpoint_path)
+                    # Extract `epoch_{i}` or `step_{i}`
+                    training_difference = os.path.splitext(path)[0]
 
-        if "epoch" in training_difference:
-            starting_epoch = int(training_difference.replace("epoch_", "")) + 1
-            resume_step = None
+                    if "epoch" in training_difference:
+                        starting_epoch = int(training_difference.replace("epoch_", "")) + 1
+                        resume_step = None
+                    else:
+                        resume_step = int(training_difference.replace("step_", ""))
+                        starting_epoch = resume_step // len(dataloaders['train'])
+                        resume_step -= starting_epoch * len(dataloaders['train'])
+                else:
+                    accelerator.print("No checkpoints found in the directory, starting training from scratch.")
+                    starting_epoch = 0
+                    resume_step = None
         else:
-            resume_step = int(training_difference.replace("step_", ""))
-            starting_epoch = resume_step // len(dataloaders['train'])
-            resume_step -= starting_epoch * len(dataloaders['train'])
+            accelerator.print("Checkpoint directory is empty or does not exist, starting training from scratch.")
+            starting_epoch = 0
+            resume_step = None
+    else:
+        starting_epoch = 0
+        resume_step = None
 
     # Initialize the progress bar correctly based on resume point
     if resume_step is not None:
@@ -285,11 +296,7 @@ def main():
             active_dataloader = dataloaders["train"]
         for step, batch in enumerate(active_dataloader, start=1):
             # if device is cpu, don't do autocast
-            if torch.cuda.is_available():
-                cast = torch.cuda.amp.autocast
-            else:
-                cast = torch.cuda.amp.autocast(enabled=False)
-            with cast():
+            with torch.cuda.amp.autocast():
                 outputs = model(**batch)
                 loss = outputs.loss
                 logger.info(loss)
