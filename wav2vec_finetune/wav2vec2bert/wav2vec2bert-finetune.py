@@ -36,9 +36,10 @@ def load_dataset_from_disk():
     #     train_samples_len=dataset['train'].num_rows
     #     for name in dataset.keys():
     #         dataset[name] = dataset[name].to_iterable_dataset()
-    dataset_name=f"{DATA_FOLDER_PATH}/{dataset_name}{filtered_suffix}{preprocessing_suffix}"
-    print("Loading Dataset : ", dataset_name)
-    dataset= load_from_disk(dataset_name)
+    dataset_name= f"dataset_name{filtered_suffix}{preprocessing_suffix}"
+    dataset_path= os.path.join(os.getcwd(), DATA_FOLDER_PATH, dataset_name)
+    print("Loading Dataset : ", dataset_path)
+    dataset= load_from_disk(dataset_path)
     train_samples_len=dataset['train'].num_rows
     if DRY_RUN:
         print("creating dataset for dry run")
@@ -144,11 +145,13 @@ def main():
             )
     else:
         checkpointing_steps = None
-        
-    model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
+    
+    # base_model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
+    base_model_path = os.path.join(os.getcwd(), LOCAL_MODEL_PATH, MODEL_CONFIG['model_name']) if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
+    finetuned_model_path = base_model_path + '-finetuned' if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     print("Loading tokenizer")
     print("Loading Processor")
-    processor = MODEL_CONFIG['processor'].from_pretrained(model_path + '-finetuned')
+    processor = MODEL_CONFIG['processor'].from_pretrained(finetuned_model_path)
     print("Loading Dataset")
     dataset, train_samples_len = load_dataset_from_disk()
     print("Mapping Dataset Processor to Dataset")
@@ -157,9 +160,9 @@ def main():
     data_collator = DataCollatorCTCWithPadding(processor=processor, input_key=MODEL_CONFIG['input_key'], padding=True)
     wer_metric = load_metric("wer")
     print("Defining Model and Arguements")
-    if RESUME_FROM_CHECKPOINT ==False or os.path.exists(f"{model_path}-finetuned/checkpoints"):
+    if RESUME_FROM_CHECKPOINT == False or os.path.exists(f"{finetuned_model_path}/{RESUME_FROM_CHECKPOINT_DIR}") == False:
         model = MODEL_CONFIG['model'].from_pretrained(
-            model_path,
+            base_model_path,
             attention_dropout=0.0,
             hidden_dropout=0.0,
             feat_proj_dropout=0.0,
@@ -172,7 +175,7 @@ def main():
         )
     else:
         model=MODEL_CONFIG['model'].from_pretrained(
-            f"{model_path}-finetuned",
+            finetuned_model_path,
             pad_token_id=processor.tokenizer.pad_token_id,
             vocab_size=len(processor.tokenizer)
         )
@@ -183,7 +186,7 @@ def main():
     #     max_steps= num_epochs * train_samples_len / batch_size / gradient_accumulation
     max_steps=None
     training_args = CustomTrainingArguements(
-        output_dir=f"{model_path}-finetuned",
+        output_dir= finetuned_model_path,
         group_by_length=True,
         per_device_train_batch_size= batch_size,
         gradient_accumulation_steps=gradient_accumulation,
@@ -233,20 +236,20 @@ def main():
     overall_step = 0
     starting_epoch = 0
     if RESUME_FROM_CHECKPOINT:
-        checkpoint_path = f"{model_path}-finetuned/{RESUME_FROM_CHECKPOINT_DIR}"
-        if os.path.exists(checkpoint_path) and any(os.scandir(checkpoint_path)):
+        checkpoints_path = os.path.join(finetuned_model_path, RESUME_FROM_CHECKPOINT_DIR)
+        if os.path.exists(checkpoints_path) and any(os.scandir(checkpoints_path)):
             if RESUME_FROM_SPECIFIC_CHECKPOINT:
-                checkpoint_path = os.path.join(checkpoint_path, RESUME_FROM_SPECIFIC_CHECKPOINT)
+                checkpoint_path = os.path.join(checkpoints_path, RESUME_FROM_SPECIFIC_CHECKPOINT)
                 accelerator.print(f"Resumed from checkpoint: {RESUME_FROM_SPECIFIC_CHECKPOINT}")
                 accelerator.load_state(checkpoint_path)
                 path = os.path.basename(checkpoint_path)
             else:
                 # Get the most recent checkpoint
-                dirs = [f.name for f in os.scandir(checkpoint_path) if f.is_dir()]
-                dirs.sort(key=lambda x: os.path.getmtime(os.path.join(checkpoint_path, x)))
+                dirs = [f.name for f in os.scandir(checkpoints_path) if f.is_dir()]
+                dirs.sort(key=lambda x: os.path.getmtime(os.path.join(checkpoints_path, x)))
                 if dirs:
                     latest_checkpoint_dir = dirs[-1]  # Most recent checkpoint is the last
-                    latest_checkpoint_path = os.path.join(checkpoint_path, latest_checkpoint_dir)
+                    latest_checkpoint_path = os.path.join(checkpoints_path, latest_checkpoint_dir)
                     accelerator.print(f"Resumed from latest checkpoint: {latest_checkpoint_path}")
                     accelerator.load_state(latest_checkpoint_path)
                     path = os.path.basename(latest_checkpoint_path)
@@ -313,7 +316,7 @@ def main():
                     
                 overall_step += 1
                 if isinstance(checkpointing_steps, int):
-                    output_dir = f"{checkpoint_path}/step_{overall_step}"
+                    output_dir = f"{checkpoints_path}/step_{overall_step}"
                     if overall_step % checkpointing_steps == 0:
                         if training_args.output_dir is not None:
                             output_dir = os.path.join(training_args.output_dir, output_dir)
@@ -332,7 +335,7 @@ def main():
         logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
         
         if checkpointing_steps == "epoch":
-            output_dir = f"{checkpoint_path}/epoch_{epoch}"
+            output_dir = f"{checkpoints_path}/epoch_{epoch}"
             if training_args.output_dir is not None:
                 output_dir = os.path.join(training_args.output_dir, output_dir)
             accelerator.save_state(output_dir)
@@ -340,7 +343,7 @@ def main():
 
     progress_bar.close()
     print("Finished Training")
-    model.save_pretrained(f"{model_path}-finetuned")
+    model.save_pretrained(finetuned_model_path)
 if __name__=='__main__':
    main()
 
