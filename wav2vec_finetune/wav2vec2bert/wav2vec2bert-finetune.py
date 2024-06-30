@@ -137,7 +137,7 @@ def main():
 
     batch_size = 8 if not DRY_RUN else 1
     gradient_accumulation = 2 if not DRY_RUN else 2
-    num_epochs = 2 if not DRY_RUN else 2
+    num_epochs = 2 if not DRY_RUN else 3
     if hasattr(CHECKPOINTING_STEPS, "isdigit"):
         if CHECKPOINTING_STEPS == "epoch":
             logger.info("Saving checkpoints by Epoch")
