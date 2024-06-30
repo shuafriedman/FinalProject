@@ -24,6 +24,9 @@ import logging
 
 from utils import CustomTrainingArguements, DataCollatorCTCWithPadding
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 def load_dataset_from_disk():
     dataset_name = DATASETS[0]['local_path']
     filtered_suffix = "-filtered" if FILTER_LONG_SAMPLES else None
@@ -36,7 +39,7 @@ def load_dataset_from_disk():
     #     train_samples_len=dataset['train'].num_rows
     #     for name in dataset.keys():
     #         dataset[name] = dataset[name].to_iterable_dataset()
-    dataset_name= f"dataset_name{filtered_suffix}{preprocessing_suffix}"
+    dataset_name= f"{dataset_name}{filtered_suffix}{preprocessing_suffix}"
     dataset_path= os.path.join(os.getcwd(), DATA_FOLDER_PATH, dataset_name)
     print("Loading Dataset : ", dataset_path)
     dataset= load_from_disk(dataset_path)
@@ -131,13 +134,16 @@ def log_gradients(model, when):
 
 
 def main():
+
     batch_size = 8 if not DRY_RUN else 1
     gradient_accumulation = 2 if not DRY_RUN else 2
-    num_epochs = 2 if not DRY_RUN else 1
+    num_epochs = 2 if not DRY_RUN else 2
     if hasattr(CHECKPOINTING_STEPS, "isdigit"):
         if CHECKPOINTING_STEPS == "epoch":
+            logger.info("Saving checkpoints by Epoch")
             checkpointing_steps = CHECKPOINTING_STEPS
         elif CHECKPOINTING_STEPS.isdigit():
+            logger.info("Saving checkpoints by digit")
             checkpointing_steps = int(CHECKPOINTING_STEPS)
         else:
             raise ValueError(
@@ -149,6 +155,8 @@ def main():
     # base_model_path =f"{LOCAL_MODEL_PATH}/{MODEL_CONFIG['model_name']}" if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     base_model_path = os.path.join(os.getcwd(), LOCAL_MODEL_PATH, MODEL_CONFIG['model_name']) if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     finetuned_model_path = base_model_path + '-finetuned' if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
+    checkpoints_path = os.path.join(finetuned_model_path, RESUME_FROM_CHECKPOINT_DIR)
+
     print("Loading tokenizer")
     print("Loading Processor")
     processor = MODEL_CONFIG['processor'].from_pretrained(finetuned_model_path)
@@ -208,9 +216,6 @@ def main():
     adam_args= {"adam_beta1": 0.9, "adam_beta2": 0.999, "adam_epsilon": 1e-8, "weight_decay" : 0.00, "learning_rate": training_args.learning_rate}
     optimizer = get_adam8_bit(adam_args, model)
 
-    logging.basicConfig(level=logging.INFO)
-    logger = logging.getLogger(__name__)
-
     dataloaders = {
         'train': DataLoader(dataset['train'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count()),
         'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count())
@@ -236,7 +241,6 @@ def main():
     overall_step = 0
     starting_epoch = 0
     if RESUME_FROM_CHECKPOINT:
-        checkpoints_path = os.path.join(finetuned_model_path, RESUME_FROM_CHECKPOINT_DIR)
         if os.path.exists(checkpoints_path) and any(os.scandir(checkpoints_path)):
             if RESUME_FROM_SPECIFIC_CHECKPOINT:
                 checkpoint_path = os.path.join(checkpoints_path, RESUME_FROM_SPECIFIC_CHECKPOINT)
@@ -255,14 +259,15 @@ def main():
                     path = os.path.basename(latest_checkpoint_path)
                     # Extract `epoch_{i}` or `step_{i}`
                     training_difference = os.path.splitext(path)[0]
-
+                    print("training_difference, " + training_difference)
                     if "epoch" in training_difference:
                         starting_epoch = int(training_difference.replace("epoch_", "")) + 1
                         resume_step = None
                     else:
                         resume_step = int(training_difference.replace("step_", ""))
+                        print("calculating resume step, "+ str(resume_step))
                         starting_epoch = resume_step // len(dataloaders['train'])
-                        resume_step -= starting_epoch * len(dataloaders['train'])
+                        resume_step -= starting_epoch * len(dataloaders['train']) #todo issue here? 
                 else:
                     accelerator.print("No checkpoints found in the directory, starting training from scratch.")
                     starting_epoch = 0
@@ -288,7 +293,8 @@ def main():
         
     if training_args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
-        
+    print("Starting Epoch: " + str(starting_epoch))
+    print("Starting Step: " + str(resume_step))
     for epoch in range(starting_epoch, training_args.num_train_epochs):
         if RESUME_FROM_CHECKPOINT and epoch == starting_epoch and resume_step is not None:
             # We need to skip steps until we reach the resumed step
@@ -318,6 +324,7 @@ def main():
                 if isinstance(checkpointing_steps, int):
                     output_dir = f"{checkpoints_path}/step_{overall_step}"
                     if overall_step % checkpointing_steps == 0:
+                        print("Saving checkpoint per configured steps")
                         if training_args.output_dir is not None:
                             output_dir = os.path.join(training_args.output_dir, output_dir)
                         accelerator.save_state(output_dir)
@@ -335,6 +342,7 @@ def main():
         logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
         
         if checkpointing_steps == "epoch":
+            print("Saving checkpoint by epoch")
             output_dir = f"{checkpoints_path}/epoch_{epoch}"
             if training_args.output_dir is not None:
                 output_dir = os.path.join(training_args.output_dir, output_dir)
