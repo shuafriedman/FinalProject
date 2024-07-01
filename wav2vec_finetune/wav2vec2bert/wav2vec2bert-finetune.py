@@ -293,6 +293,10 @@ def main():
         model.gradient_checkpointing_enable()
     print("Starting Epoch: " + str(starting_epoch))
     print("Starting Step: " + str(resume_step))
+    if not RESUME_FROM_CHECKPOINT or not os.path.exists(f"{finetuned_model_path}/{RESUME_FROM_CHECKPOINT_DIR}"):
+        with open('results.txt', 'w') as results_file:
+            results_file.write("")
+            
     for epoch in range(starting_epoch, training_args.num_train_epochs):
         if RESUME_FROM_CHECKPOINT and epoch == starting_epoch and resume_step is not None:
             # We need to skip steps until we reach the resumed step
@@ -327,6 +331,9 @@ def main():
                         if training_args.output_dir is not None:
                             output_dir = os.path.join(training_args.output_dir, output_dir)
                         accelerator.save_state(output_dir)
+                        with open('results.txt', 'a') as results_file:
+                            results_file.write(f"Checkpoint at step {overall_step}: Training Loss: {loss.item()}\n")
+
             progress_bar.update(1)
             progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
             # Evaluate at the end of each epoch
@@ -346,6 +353,11 @@ def main():
             if training_args.output_dir is not None:
                 output_dir = os.path.join(training_args.output_dir, output_dir)
             accelerator.save_state(output_dir)
+            with open('results.txt', 'a') as results_file:
+                results_file.write(f"Checkpoint at epoch {epoch}: Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}\n")
+        else:
+            with open('results.txt', 'a') as results_file:
+                results_file.write(f"Epoch {epoch}: Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}\n")
         progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
 
     progress_bar.close()
