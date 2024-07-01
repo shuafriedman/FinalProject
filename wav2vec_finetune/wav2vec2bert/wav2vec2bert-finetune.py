@@ -134,10 +134,6 @@ def log_gradients(model, when):
 
 
 def main():
-
-    batch_size = 8 if not DRY_RUN else 1
-    gradient_accumulation = 2 if not DRY_RUN else 2
-    num_epochs = 2 if not DRY_RUN else 3
     if hasattr(CHECKPOINTING_STEPS, "isdigit"):
         if CHECKPOINTING_STEPS == "epoch":
             logger.info("Saving checkpoints by Epoch")
@@ -192,28 +188,30 @@ def main():
 
     # if train_samples_len:
     #     max_steps= num_epochs * train_samples_len / batch_size / gradient_accumulation
+    # batch_size = 8 if not DRY_RUN else 1
+    # gradient_accumulation = 2 if not DRY_RUN else 2
+    # num_epochs = 2 if not DRY_RUN else 3
+    # warmup_steps_ratio = 0.1
+    # weight_decay = 0.01
     max_steps=None
     training_args = CustomTrainingArguements(
         output_dir= finetuned_model_path,
         group_by_length=True,
-        per_device_train_batch_size= batch_size,
-        gradient_accumulation_steps=gradient_accumulation,
+        per_device_train_batch_size= 8 if not DRY_RUN else 1,
+        gradient_accumulation_steps= 2 if not DRY_RUN else 2,
         evaluation_strategy="epoch",
-        num_train_epochs=num_epochs,
+        num_train_epochs= 2 if not DRY_RUN else 1,
         gradient_checkpointing=True,
-        # save_steps=600,
         max_steps = max_steps,
-        # eval_steps=300 if not DRY_RUN else max_steps,
         logging_steps=50 if not DRY_RUN else 16,
         learning_rate=5e-5,
-        # warmup_steps=500,
-        # torch_compile=True
-        # auto_find_batch_size=True
+        warmup_steps_ratio=0.1,
+        weight_decay=0.001,
     ) 
     print("Setting Trainer")
 # Instead of directly passing 'dataset' to DataLoader, pass dataset['train'] or dataset['test']
     
-    adam_args= {"adam_beta1": 0.9, "adam_beta2": 0.999, "adam_epsilon": 1e-8, "weight_decay" : 0.00, "learning_rate": training_args.learning_rate}
+    adam_args= {"adam_beta1": 0.9, "adam_beta2": 0.999, "adam_epsilon": 1e-8, "weight_decay" :training_args.weight_decay, "learning_rate": training_args.learning_rate}
     optimizer = get_adam8_bit(adam_args, model)
 
     dataloaders = {
@@ -229,13 +227,13 @@ def main():
 
     total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
 
-    # lr_scheduler = get_linear_schedule_with_warmup(
-    #     optimizer=optimizer,
-    #     num_warmup_steps=total_training_steps * 0.05,
-    #     num_training_steps=total_training_steps
-    # )
-    dataloaders['train'], dataloaders['test'], model, optimizer = accelerator.prepare(
-        dataloaders['train'],  dataloaders['test'], model, optimizer
+    lr_scheduler = get_linear_schedule_with_warmup(
+        optimizer=optimizer,
+        num_warmup_steps= total_training_steps * training_args.warmup_steps_ratio,
+        num_training_steps=total_training_steps
+    )
+    dataloaders['train'], dataloaders['test'], model, optimizer, lr_scheduler= accelerator.prepare(
+        dataloaders['train'],  dataloaders['test'], model, optimizer, lr_scheduler
     )
     resume_step = None
     overall_step = 0
@@ -318,6 +316,7 @@ def main():
                     accelerator.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     # log_gradients(model, "After Clipping")
                     optimizer.step()
+                    lr_scheduler.step()
                     optimizer.zero_grad()
                     
                 overall_step += 1

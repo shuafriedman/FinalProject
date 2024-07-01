@@ -35,7 +35,11 @@ class DataCollatorCTCWithPadding:
         return batch
     
 class CustomTrainingArguements:
-    def __init__(self, output_dir, group_by_length, per_device_train_batch_size, gradient_accumulation_steps, evaluation_strategy, num_train_epochs, gradient_checkpointing, logging_steps, learning_rate, max_steps):
+    def __init__(self, output_dir, group_by_length, per_device_train_batch_size, 
+                 gradient_accumulation_steps, evaluation_strategy, num_train_epochs, 
+                 gradient_checkpointing, logging_steps, learning_rate, max_steps,
+                    warmup_steps_ratio, weight_decay
+        ):
         self.output_dir = output_dir
         self.group_by_length = group_by_length
         self.per_device_train_batch_size = per_device_train_batch_size
@@ -46,6 +50,8 @@ class CustomTrainingArguements:
         self.logging_steps = logging_steps
         self.learning_rate = learning_rate
         self.max_steps = max_steps
+        self.warmup_steps_ratio = warmup_steps_ratio
+        self.weight_decay = weight_decay
 
     def __setattr__(self, name: str, value: Any) -> None:
         self.__dict__[name] = value
