@@ -152,7 +152,7 @@ def main():
     base_model_path = os.path.join(os.getcwd(), LOCAL_MODEL_PATH, MODEL_CONFIG['model_name']) if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     finetuned_model_path = base_model_path + '-finetuned' if DOWNLOAD_MODEL_LOCALLY else MODEL_CONFIG['model_name']
     checkpoints_path = os.path.join(finetuned_model_path, RESUME_FROM_CHECKPOINT_DIR)
-
+    results_file_path = os.path.join(finetuned_model_path, 'results.txt')
     print("Loading tokenizer")
     print("Loading Processor")
     processor = MODEL_CONFIG['processor'].from_pretrained(finetuned_model_path)
@@ -200,7 +200,7 @@ def main():
         per_device_train_batch_size= 8 if not DRY_RUN else 1,
         gradient_accumulation_steps= 2 if not DRY_RUN else 2,
         evaluation_strategy="epoch",
-        num_train_epochs= 2 if not DRY_RUN else 1,
+        num_train_epochs= 2 if not DRY_RUN else 4,
         gradient_checkpointing=True,
         max_steps = max_steps,
         logging_steps=50 if not DRY_RUN else 16,
@@ -294,7 +294,7 @@ def main():
     print("Starting Epoch: " + str(starting_epoch))
     print("Starting Step: " + str(resume_step))
     if not RESUME_FROM_CHECKPOINT or not os.path.exists(f"{finetuned_model_path}/{RESUME_FROM_CHECKPOINT_DIR}"):
-        with open('results.txt', 'w') as results_file:
+        with open(results_file_path, 'w') as results_file:
             results_file.write("")
             
     for epoch in range(starting_epoch, training_args.num_train_epochs):
@@ -331,7 +331,7 @@ def main():
                         if training_args.output_dir is not None:
                             output_dir = os.path.join(training_args.output_dir, output_dir)
                         accelerator.save_state(output_dir)
-                        with open('results.txt', 'a') as results_file:
+                        with open(results_file_path, 'a') as results_file:
                             results_file.write(f"Checkpoint at step {overall_step}: Training Loss: {loss.item()}\n")
 
             progress_bar.update(1)
@@ -353,10 +353,10 @@ def main():
             if training_args.output_dir is not None:
                 output_dir = os.path.join(training_args.output_dir, output_dir)
             accelerator.save_state(output_dir)
-            with open('results.txt', 'a') as results_file:
+            with open(results_file_path, 'a') as results_file:
                 results_file.write(f"Checkpoint at epoch {epoch}: Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}\n")
         else:
-            with open('results.txt', 'a') as results_file:
+            with open(results_file_path, 'a') as results_file:
                 results_file.write(f"Epoch {epoch}: Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}\n")
         progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
 
