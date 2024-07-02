@@ -259,13 +259,13 @@ def main():
                     training_difference = os.path.splitext(path)[0]
                     print("training_difference, " + training_difference)
                     if "epoch" in training_difference:
-                        starting_epoch = int(training_difference.replace("epoch_", "")) + 1
+                        starting_epoch = int(training_difference.replace("epoch_", ""))
                         resume_step = None
                     else:
                         resume_step = int(training_difference.replace("step_", ""))
                         print("calculating resume step, "+ str(resume_step))
-                        starting_epoch = resume_step // len(dataloaders['train'])
-                        resume_step -= starting_epoch * len(dataloaders['train']) #todo issue here? 
+                        starting_epoch = resume_step // len(dataloaders['train']) 
+                        resume_step -= starting_epoch * len(dataloaders['train']) 
                 else:
                     accelerator.print("No checkpoints found in the directory, starting training from scratch.")
                     starting_epoch = 0
@@ -297,7 +297,7 @@ def main():
         with open(results_file_path, 'w') as results_file:
             results_file.write("")
             
-    for epoch in range(starting_epoch, training_args.num_train_epochs):
+    for epoch in range(starting_epoch +1, training_args.num_train_epochs):
         if RESUME_FROM_CHECKPOINT and epoch == starting_epoch and resume_step is not None:
             # We need to skip steps until we reach the resumed step
             active_dataloader = accelerator.skip_first_batches(dataloaders["train"], resume_step)
@@ -335,21 +335,21 @@ def main():
                             results_file.write(f"Checkpoint at step {overall_step}: Training Loss: {loss.item()}\n")
 
             progress_bar.update(1)
-            progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch + 1}/{training_args.num_train_epochs}")
+            progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch}/{training_args.num_train_epochs}")
             # Evaluate at the end of each epoch
             current_global_step = step + epoch * total_steps_per_epoch
 
             if current_global_step % training_args.logging_steps == 0:
                 eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
-                logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
+                logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
         #evaluate if logging steps is None or if we are at the end of the last epoch
         # if training_args.logging_steps == None or (epoch + 1 == training_args.num_train_epochs):    
         eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
-        logger.info(f"Global Step: {current_global_step}, Epoch: {epoch + 1}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
+        logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
         
         if checkpointing_steps == "epoch":
             print("Saving checkpoint by epoch")
-            output_dir = f"{checkpoints_path}/epoch_{epoch}"
+            output_dir = f"{checkpoints_path}/epoch_{epoch+1}"
             if training_args.output_dir is not None:
                 output_dir = os.path.join(training_args.output_dir, output_dir)
             accelerator.save_state(output_dir)
