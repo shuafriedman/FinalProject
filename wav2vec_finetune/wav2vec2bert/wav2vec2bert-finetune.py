@@ -46,10 +46,11 @@ def load_dataset_from_disk():
     train_samples_len=dataset['train'].num_rows
     if DRY_RUN:
         print("creating dataset for dry run")
-        samples = 16
+        samples = 128
+        val_samples = 128
         small_train_subset = dataset['train'].select(range(samples))
         train_samples_len = samples
-        small_test_subset = dataset['test'].select(range(samples)) 
+        small_test_subset = dataset['test'].select(range(val_samples)) 
         dataset = DatasetDict({"train": small_train_subset, "test": small_test_subset})
     return dataset, train_samples_len
 
@@ -198,12 +199,12 @@ def main():
         output_dir= finetuned_model_path,
         group_by_length=True,
         per_device_train_batch_size= 8 if not DRY_RUN else 1,
-        gradient_accumulation_steps= 2 if not DRY_RUN else 3,
+        gradient_accumulation_steps= 2 if not DRY_RUN else 8,
         evaluation_strategy="epoch",
         num_train_epochs= 2 if not DRY_RUN else 3,
         gradient_checkpointing=True,
         max_steps = max_steps,
-        logging_steps=50 if not DRY_RUN else 8,
+        logging_steps=total_steps_per_epoch if not DRY_RUN else 64,
         learning_rate=5e-5,
         warmup_steps_ratio=0.1,
         weight_decay=0.001,
@@ -334,10 +335,10 @@ def main():
                         with open(results_file_path, 'a') as results_file:
                             results_file.write(f"Checkpoint at step {overall_step}: Training Loss: {loss.item()}\n")
 
+            current_global_step = step + (epoch -1) * total_steps_per_epoch
             progress_bar.update(1)
-            progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch}/{training_args.num_train_epochs}")
+            progress_bar.set_postfix(loss=f"{loss.item():.4f}", epoch=f"{epoch}/{training_args.num_train_epochs}", global_steps=f"{current_global_step}/{len(dataloaders['train'])}")
             # Evaluate at the end of each epoch
-            current_global_step = step + epoch * total_steps_per_epoch
 
             if current_global_step % training_args.logging_steps == 0:
                 eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
