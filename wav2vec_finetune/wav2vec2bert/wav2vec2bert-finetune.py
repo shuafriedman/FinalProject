@@ -46,7 +46,7 @@ def load_dataset_from_disk():
     train_samples_len=dataset['train'].num_rows
     if DRY_RUN:
         print("creating dataset for dry run")
-        samples = 32
+        samples = 16
         small_train_subset = dataset['train'].select(range(samples))
         train_samples_len = samples
         small_test_subset = dataset['test'].select(range(samples)) 
@@ -198,12 +198,12 @@ def main():
         output_dir= finetuned_model_path,
         group_by_length=True,
         per_device_train_batch_size= 8 if not DRY_RUN else 1,
-        gradient_accumulation_steps= 2 if not DRY_RUN else 2,
+        gradient_accumulation_steps= 2 if not DRY_RUN else 3,
         evaluation_strategy="epoch",
-        num_train_epochs= 2 if not DRY_RUN else 4,
+        num_train_epochs= 2 if not DRY_RUN else 3,
         gradient_checkpointing=True,
         max_steps = max_steps,
-        logging_steps=50 if not DRY_RUN else 16,
+        logging_steps=50 if not DRY_RUN else 8,
         learning_rate=5e-5,
         warmup_steps_ratio=0.1,
         weight_decay=0.001,
@@ -291,13 +291,13 @@ def main():
         
     if training_args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
-    print("Starting Epoch: " + str(starting_epoch))
+    print("Starting Epoch: " + str(starting_epoch + 1))
     print("Starting Step: " + str(resume_step))
     if not RESUME_FROM_CHECKPOINT or not os.path.exists(f"{finetuned_model_path}/{RESUME_FROM_CHECKPOINT_DIR}"):
         with open(results_file_path, 'w') as results_file:
             results_file.write("")
             
-    for epoch in range(starting_epoch +1, training_args.num_train_epochs):
+    for epoch in range(starting_epoch + 1, training_args.num_train_epochs +1):
         if RESUME_FROM_CHECKPOINT and epoch == starting_epoch and resume_step is not None:
             # We need to skip steps until we reach the resumed step
             active_dataloader = accelerator.skip_first_batches(dataloaders["train"], resume_step)
@@ -349,7 +349,7 @@ def main():
         
         if checkpointing_steps == "epoch":
             print("Saving checkpoint by epoch")
-            output_dir = f"{checkpoints_path}/epoch_{epoch+1}"
+            output_dir = f"{checkpoints_path}/epoch_{epoch}"
             if training_args.output_dir is not None:
                 output_dir = os.path.join(training_args.output_dir, output_dir)
             accelerator.save_state(output_dir)

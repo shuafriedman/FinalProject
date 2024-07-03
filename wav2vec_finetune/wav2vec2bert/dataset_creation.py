@@ -10,8 +10,8 @@ from transformers import SeamlessM4TFeatureExtractor
 from transformers import Wav2Vec2BertProcessor
 import torch
 import numpy as np
-chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\%\‘\”\�\'\]\[\{\}\־]'
-# hebrew_letters = [
+chars_to_remove_regex = '[\,\?\.\!\-\;\:\"\“\״\%\‘\”\�\'\]\[\{\}\־\u202b]'
+hebrew_letters = set("אבגדהוזחטיכךלמםנןסעפףצץקרשת")# hebrew_letters = [
 #     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט',
 #     'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ',
 #     'ק', 'ר', 'ש', 'ת'
@@ -45,13 +45,10 @@ def subsample_dataset(dataset):
     assert 0 < SUBSAMPLE_RATIO <= 1, "Subsample ratio must be between 0 and 1."
     return dataset.shuffle(seed=42).select(range(int(len(dataset) * SUBSAMPLE_RATIO)))
 
-def drop_english_samples(dataset):
-    def contains_english_or_digits(text):
-        english_letters = set(string.ascii_lowercase)
-        digits = set(string.digits)
-        return any(char in english_letters or char in digits for char in text.lower())
-    filtered_dataset = dataset.filter(lambda example: not contains_english_or_digits(example['transcription']))
-    return filtered_dataset
+def filter_for_hebrew(dataset):
+    def contains_only_hebrew(text):
+        return all(char in hebrew_letters or char.isspace() for char in text)
+    filtered_dataset = dataset.filter(lambda example: contains_only_hebrew(example["transcription"]))
 
 def extract_all_chars(batch):
   all_text = " ".join(batch["transcription"])
@@ -84,8 +81,8 @@ def standardize_dataset(dataset, dataset_name):
     except:
         pass
     print("writing name of dataset to dataset column")
-    dataset= dataset.map(lambda x: {'dataset': dataset_name})
-    dataset= dataset.map(remove_special_characters)
+    dataset= dataset.map(lambda x: {'dataset': dataset_name}, batch_size=-1)
+    dataset= dataset.map(remove_special_characters, batch_size=-1)
     return dataset
 
 def main():
@@ -148,7 +145,7 @@ def main():
             dataset[name] = filter_long_samples(dataset[name])
     if KEEP_HEBREW_ONLY:
         for name in dataset:
-            dataset[name] = drop_english_samples(dataset[name])
+            dataset[name] = filter_for_hebrew(dataset[name])
     print("Casting Audio")
     dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
 
@@ -172,7 +169,7 @@ def main():
     processor.save_pretrained(local_model_path + '-finetuned')
     if PERFORM_PREPROCESSING_ON_DATASET_CREATION:
         dataset = dataset.map(prepare_dataset, remove_columns=dataset["train"].features.keys(), \
-                            fn_kwargs={"processor": processor, "input_key": MODEL_CONFIG['input_key']})
+                            fn_kwargs={"processor": processor, "input_key": MODEL_CONFIG['input_key']}, batch_size=-1)
     for name in dataset:
         dataset[name] = dataset[name].filter(remove_nan_batches, fn_kwargs={"input_key": MODEL_CONFIG['input_key']})
 
