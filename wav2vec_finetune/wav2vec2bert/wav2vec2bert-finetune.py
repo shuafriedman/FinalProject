@@ -82,37 +82,38 @@ def get_adam8_bit(adam_args, model):
     return adam_bnb_optim
 
 def evaluate(model, dataloader, accelerator, processor, wer_metric):
-    model.eval()  # Set the model to evaluation mode
-    total_loss = 0
-    total_items = 0
-    # Prepare to collect predictions and references
-    predictions = []
-    references = []
-    with torch.no_grad(), tqdm(dataloader, desc="Evaluating", leave=False) as tqdm_dataloader:
-        for batch in tqdm_dataloader:
-            with torch.cuda.amp.autocast():
-                outputs = model(**batch)
-            loss = outputs.loss
-            # total_loss += accelerator.gather(loss) * batch[MODEL_CONFIG['input_key']].size(0)
-            # total_items += batch[MODEL_CONFIG['input_key']].size(0)
-            # Decode the predicted IDs to text
-            logits = outputs.logits
-            pred_ids = torch.argmax(logits, dim=-1)
-            batch_predictions = processor.batch_decode(pred_ids, skip_special_tokens=True)
-            predictions.extend(batch_predictions)
-            # Assuming labels are already IDs, decode them
-            # If your labels are in another format, you might need to adjust this
-            labels = batch["labels"]
-            labels[labels == -100] = processor.tokenizer.pad_token_id
-            batch_references = processor.batch_decode(labels, skip_special_tokens=True)
-            references.extend(batch_references)
-            # tqdm_dataloader.set_description(f"Evaluating (Loss: {total_loss / total_items:.4f})")
-    # Compute WER
-    wer_score = wer_metric.compute(predictions=predictions, references=references)
-    # average_loss = total_loss / total_items
-    model.train()  # Set the model back to training mode
-    # Return both loss and WER
-    return None, wer_score
+    if accelerator.is_local_main_process:
+        model.eval()  # Set the model to evaluation mode
+        total_loss = 0
+        total_items = 0
+        # Prepare to collect predictions and references
+        predictions = []
+        references = []
+        with torch.no_grad(), tqdm(dataloader, desc="Evaluating", leave=False) as tqdm_dataloader:
+            for batch in tqdm_dataloader:
+                with torch.cuda.amp.autocast():
+                    outputs = model(**batch)
+                
+                # total_loss += accelerator.gather(loss) * batch[MODEL_CONFIG['input_key']].size(0)
+                # total_items += batch[MODEL_CONFIG['input_key']].size(0)
+                # Decode the predicted IDs to text
+                logits = outputs.logits
+                pred_ids = torch.argmax(logits, dim=-1)
+                batch_predictions = processor.batch_decode(pred_ids, skip_special_tokens=True)
+                predictions.extend(batch_predictions)
+                # Assuming labels are already IDs, decode them
+                # If your labels are in another format, you might need to adjust this
+                labels = batch["labels"]
+                labels[labels == -100] = processor.tokenizer.pad_token_id
+                batch_references = processor.batch_decode(labels, skip_special_tokens=True)
+                references.extend(batch_references)
+                # tqdm_dataloader.set_description(f"Evaluating (Loss: {total_loss / total_items:.4f})")
+        # Compute WER
+        wer_score = wer_metric.compute(predictions=predictions, references=references)
+        # average_loss = total_loss / total_items
+        model.train()  # Set the model back to training mode
+        # Return both loss and WER
+        return None, wer_score
 
 def log_gradients(model, when):
     total_norm = 0.0
@@ -190,7 +191,8 @@ def main():
     training_args = CustomTrainingArguements(
         output_dir= finetuned_model_path,
         group_by_length=True,
-        per_device_train_batch_size= 1 if not DRY_RUN else 1,
+        per_device_train_batch_size= 1 if not DRY_RUN else 2,
+        per_device_eval_batch_size= 2 if not DRY_RUN else 2,
         gradient_accumulation_steps= 4 if not DRY_RUN else 4,
         evaluation_strategy="epoch",
         num_train_epochs= 10 if not DRY_RUN else 3,
@@ -209,7 +211,7 @@ def main():
 
     dataloaders = {
         'train': DataLoader(dataset['train'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count()),
-        'test': DataLoader(dataset['test'], batch_size=training_args.per_device_train_batch_size, collate_fn=data_collator, num_workers=os.cpu_count())
+        'test': DataLoader(dataset['test'], batch_size=training_args.per_device_eval_batch_size, collate_fn=data_collator, num_workers=os.cpu_count())
     }
     accelerator = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=training_args.gradient_accumulation_steps)
     
@@ -280,7 +282,7 @@ def main():
         total_steps_per_epoch = len(dataloaders['train'])
         initial_step = 0
 
-    progress_bar = tqdm(range(1, total_steps_per_epoch + 1), desc="Training", initial=initial_step)
+    progress_bar = tqdm(range(1, total_steps_per_epoch + 1), desc="Training", initial=initial_step, disable=not accelerator.is_local_main_process)
         
     if training_args.gradient_checkpointing:
         model.gradient_checkpointing_enable()
@@ -332,12 +334,15 @@ def main():
 
             if current_global_step % training_args.logging_steps == 0:
                 if checkpointing_steps != "epoch":
-                    eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
-                    logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
+                    if accelerator.is_local_main_process:
+                        eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
+                        logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
         #evaluate if logging steps is None or if we are at the end of the last epoch
         # if training_args.logging_steps == None or (epoch + 1 == training_args.num_train_epochs):    
-        eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
-        logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
+        if accelerator.is_local_main_process:
+            eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
+            logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
+
         
         if checkpointing_steps == "epoch":
             print("Saving checkpoint by epoch")
@@ -345,16 +350,20 @@ def main():
             if training_args.output_dir is not None:
                 output_dir = os.path.join(training_args.output_dir, output_dir)
             accelerator.save_state(output_dir)
-            with open(results_file_path, 'a') as results_file:
-                results_file.write(f"Checkpoint at epoch {epoch}: Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}\n")
+            if accelerator.is_local_main_process:
+                with open(results_file_path, 'a') as results_file:
+                    results_file.write(f"Checkpoint at epoch {epoch}: Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}\n")
         else:
-            with open(results_file_path, 'a') as results_file:
-                results_file.write(f"Epoch {epoch}: Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}\n")
+            if accelerator.is_local_main_process:
+                with open(results_file_path, 'a') as results_file:
+                    results_file.write(f"Epoch {epoch}: Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}\n")
         progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
 
-    progress_bar.close()
-    print("Finished Training")
-    model.save_pretrained(finetuned_model_path)
+    # Save the final model
+    accelerator.wait_for_everyone()
+    if accelerator.is_local_main_process:
+        model = accelerator.unwrap_model(model)
+        model.save_pretrained(finetuned_model_path)    
 if __name__=='__main__':
    main()
 
