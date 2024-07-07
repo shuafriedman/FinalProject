@@ -90,7 +90,8 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
     references = []
     with torch.no_grad(), tqdm(dataloader, desc="Evaluating", leave=False) as tqdm_dataloader:
         for batch in tqdm_dataloader:
-            outputs = model(**batch)
+            with torch.cuda.amp.autocast():
+                outputs = model(**batch)
             loss = outputs.loss
             total_loss += accelerator.gather(loss).item() * batch[MODEL_CONFIG['input_key']].size(0)
             total_items += batch[MODEL_CONFIG['input_key']].size(0)
@@ -193,7 +194,7 @@ def main():
         per_device_eval_batch_size= 2 if not DRY_RUN else 2,
         gradient_accumulation_steps= 4 if not DRY_RUN else 4,
         evaluation_strategy="epoch",
-        num_train_epochs= 10 if not DRY_RUN else 3,
+        num_train_epochs= 10 if not DRY_RUN else 4,
         gradient_checkpointing=True,
         max_steps = max_steps,
         logging_steps=total_steps_per_epoch if not DRY_RUN else 64,
