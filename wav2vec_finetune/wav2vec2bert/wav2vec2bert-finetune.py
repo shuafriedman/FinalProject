@@ -82,38 +82,36 @@ def get_adam8_bit(adam_args, model):
     return adam_bnb_optim
 
 def evaluate(model, dataloader, accelerator, processor, wer_metric):
-    if accelerator.is_local_main_process:
-        model.eval()  # Set the model to evaluation mode
-        total_loss = 0
-        total_items = 0
-        # Prepare to collect predictions and references
-        predictions = []
-        references = []
-        with torch.no_grad(), tqdm(dataloader, desc="Evaluating", leave=False) as tqdm_dataloader:
-            for batch in tqdm_dataloader:
-                with torch.cuda.amp.autocast():
-                    outputs = model(**batch)
-                
-                # total_loss += accelerator.gather(loss) * batch[MODEL_CONFIG['input_key']].size(0)
-                # total_items += batch[MODEL_CONFIG['input_key']].size(0)
-                # Decode the predicted IDs to text
-                logits = outputs.logits
-                pred_ids = torch.argmax(logits, dim=-1)
-                batch_predictions = processor.batch_decode(pred_ids, skip_special_tokens=True)
-                predictions.extend(batch_predictions)
-                # Assuming labels are already IDs, decode them
-                # If your labels are in another format, you might need to adjust this
-                labels = batch["labels"]
-                labels[labels == -100] = processor.tokenizer.pad_token_id
-                batch_references = processor.batch_decode(labels, skip_special_tokens=True)
-                references.extend(batch_references)
-                # tqdm_dataloader.set_description(f"Evaluating (Loss: {total_loss / total_items:.4f})")
-        # Compute WER
-        wer_score = wer_metric.compute(predictions=predictions, references=references)
-        # average_loss = total_loss / total_items
-        model.train()  # Set the model back to training mode
-        # Return both loss and WER
-        return None, wer_score
+    model.eval()  # Set the model to evaluation mode
+    total_loss = 0
+    total_items = 0
+    # Prepare to collect predictions and references
+    predictions = []
+    references = []
+    with torch.no_grad(), tqdm(dataloader, desc="Evaluating", leave=False) as tqdm_dataloader:
+        for batch in tqdm_dataloader:
+            outputs = model(**batch)
+            loss = outputs.loss
+            total_loss += accelerator.gather(loss).item() * batch[MODEL_CONFIG['input_key']].size(0)
+            total_items += batch[MODEL_CONFIG['input_key']].size(0)
+            # Decode the predicted IDs to text
+            logits = outputs.logits
+            pred_ids = torch.argmax(logits, dim=-1)
+            batch_predictions = processor.batch_decode(pred_ids, skip_special_tokens=True)
+            predictions.extend(batch_predictions)
+            # Assuming labels are already IDs, decode them
+            # If your labels are in another format, you might need to adjust this
+            labels = batch["labels"]
+            labels[labels == -100] = processor.tokenizer.pad_token_id
+            batch_references = processor.batch_decode(labels, skip_special_tokens=True)
+            references.extend(batch_references)
+            tqdm_dataloader.set_description(f"Evaluating (Loss: {total_loss / total_items:.4f})")
+    # Compute WER
+    wer_score = wer_metric.compute(predictions=predictions, references=references)
+    average_loss = total_loss / total_items
+    model.train()  # Set the model back to training mode
+    # Return both loss and WER
+    return average_loss, wer_score
 
 def log_gradients(model, when):
     total_norm = 0.0
