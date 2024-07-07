@@ -198,16 +198,16 @@ def main():
     training_args = CustomTrainingArguements(
         output_dir= finetuned_model_path,
         group_by_length=True,
-        per_device_train_batch_size= 8 if not DRY_RUN else 1,
-        gradient_accumulation_steps= 2 if not DRY_RUN else 8,
+        per_device_train_batch_size= 2 if not DRY_RUN else 2,
+        gradient_accumulation_steps= 4 if not DRY_RUN else 4,
         evaluation_strategy="epoch",
-        num_train_epochs= 2 if not DRY_RUN else 3,
+        num_train_epochs= 10 if not DRY_RUN else 3,
         gradient_checkpointing=True,
         max_steps = max_steps,
         logging_steps=total_steps_per_epoch if not DRY_RUN else 64,
         learning_rate=5e-5,
         warmup_steps_ratio=0.1,
-        weight_decay=0.001,
+        weight_decay=0.0001,
     ) 
     print("Setting Trainer")
 # Instead of directly passing 'dataset' to DataLoader, pass dataset['train'] or dataset['test']
@@ -341,8 +341,9 @@ def main():
             # Evaluate at the end of each epoch
 
             if current_global_step % training_args.logging_steps == 0:
-                eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
-                logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
+                if checkpointing_steps != "epoch":
+                    eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
+                    logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
         #evaluate if logging steps is None or if we are at the end of the last epoch
         # if training_args.logging_steps == None or (epoch + 1 == training_args.num_train_epochs):    
         eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
