@@ -83,32 +83,36 @@ def get_adam8_bit(adam_args, model):
 
 def evaluate(model, dataloader, accelerator, processor, wer_metric):
     model.eval()  # Set the model to evaluation mode
-    #create an eval loop to use for distributed training on multi gpu
-    for step, batch in enumerate(dataloader):
-        with torch.no_grad():
-            outputs = model(**batch)
-        logits = outputs.logits
-        pred_ids = torch.argmax(logits, dim=-1)
-        pred_str = processor.batch_decode(pred_ids)
-        labels = batch["labels"]
-        label_str = processor.batch_decode(labels)
-        #add debug logs
-        logger.info(f"len of pred_str: {len(pred_str)}")
-        logger.info(f"len of label_str: {len(label_str)}")
-        
-        gathered = accelerator.gather_for_metrics(pred_str, label_str)
-        logger.info(f"len of gathered: {len(gathered)}")
-        gathered_preds, gathered_labels = gathered
-        logger.info(f"len of gathered_preds: {len(gathered_preds)}")
-        logger.info(f"len of gathered_labels: {len(gathered_labels)}")
-        wer_metric.add_batch(predictions=gathered_preds, references=gathered_labels)
-        
-        tqdm.set_description(f"Evaluating eval step {step}/{len(dataloader)}")
-            
-    wer = wer_metric.compute()
-    wer_metric.reset()
-    model.train()
-    return None, wer
+    total_loss = 0
+    total_items = 0
+    # Prepare to collect predictions and references
+    predictions = []
+    references = []
+    with torch.no_grad(), tqdm(dataloader, desc="Evaluating", leave=False) as tqdm_dataloader:
+        for batch in tqdm_dataloader:
+            with torch.cuda.amp.autocast():
+                outputs = model(**batch)
+            loss = outputs.loss
+            # total_loss += accelerator.gather(loss) * batch[MODEL_CONFIG['input_key']].size(0)
+            # total_items += batch[MODEL_CONFIG['input_key']].size(0)
+            # Decode the predicted IDs to text
+            logits = outputs.logits
+            pred_ids = torch.argmax(logits, dim=-1)
+            batch_predictions = processor.batch_decode(pred_ids, skip_special_tokens=True)
+            predictions.extend(batch_predictions)
+            # Assuming labels are already IDs, decode them
+            # If your labels are in another format, you might need to adjust this
+            labels = batch["labels"]
+            labels[labels == -100] = processor.tokenizer.pad_token_id
+            batch_references = processor.batch_decode(labels, skip_special_tokens=True)
+            references.extend(batch_references)
+            # tqdm_dataloader.set_description(f"Evaluating (Loss: {total_loss / total_items:.4f})")
+    # Compute WER
+    wer_score = wer_metric.compute(predictions=predictions, references=references)
+    # average_loss = total_loss / total_items
+    model.train()  # Set the model back to training mode
+    # Return both loss and WER
+    return None, wer_score
 
 def log_gradients(model, when):
     total_norm = 0.0
@@ -186,7 +190,7 @@ def main():
     training_args = CustomTrainingArguements(
         output_dir= finetuned_model_path,
         group_by_length=True,
-        per_device_train_batch_size= 2 if not DRY_RUN else 2,
+        per_device_train_batch_size= 1 if not DRY_RUN else 1,
         gradient_accumulation_steps= 4 if not DRY_RUN else 4,
         evaluation_strategy="epoch",
         num_train_epochs= 10 if not DRY_RUN else 3,
@@ -299,9 +303,7 @@ def main():
             with torch.cuda.amp.autocast():
                 outputs = model(**batch)
                 loss = outputs.loss
-                logger.info(loss)
                 loss = loss / training_args.gradient_accumulation_steps
-                logger.info(loss)
                 accelerator.backward(loss)
                 # log_gradients(model, "Before Clipping")
 
