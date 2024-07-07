@@ -46,7 +46,7 @@ def load_dataset_from_disk():
     train_samples_len=dataset['train'].num_rows
     if DRY_RUN:
         print("creating dataset for dry run")
-        samples = 128
+        samples = 512
         val_samples = 128
         small_train_subset = dataset['train'].select(range(samples))
         train_samples_len = samples
@@ -92,9 +92,9 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
         for batch in tqdm_dataloader:
             with torch.cuda.amp.autocast():
                 outputs = model(**batch)
-            loss = outputs.loss
-            total_loss += accelerator.gather(loss).item() * batch[MODEL_CONFIG['input_key']].size(0)
-            total_items += batch[MODEL_CONFIG['input_key']].size(0)
+            # loss = outputs.loss
+            # total_loss += accelerator.gather(loss).item() * batch[MODEL_CONFIG['input_key']].size(0)
+            # total_items += batch[MODEL_CONFIG['input_key']].size(0)
             # Decode the predicted IDs to text
             logits = outputs.logits
             pred_ids = torch.argmax(logits, dim=-1)
@@ -106,13 +106,13 @@ def evaluate(model, dataloader, accelerator, processor, wer_metric):
             labels[labels == -100] = processor.tokenizer.pad_token_id
             batch_references = processor.batch_decode(labels, skip_special_tokens=True)
             references.extend(batch_references)
-            tqdm_dataloader.set_description(f"Evaluating (Loss: {total_loss / total_items:.4f})")
+            # tqdm_dataloader.set_description(f"Evaluating (Loss: {total_loss / total_items:.4f})")
     # Compute WER
     wer_score = wer_metric.compute(predictions=predictions, references=references)
-    average_loss = total_loss / total_items
+    # average_loss = total_loss / total_items
     model.train()  # Set the model back to training mode
     # Return both loss and WER
-    return average_loss, wer_score
+    return None, wer_score
 
 def log_gradients(model, when):
     total_norm = 0.0
@@ -152,7 +152,6 @@ def main():
     print("Loading Dataset")
     dataset, train_samples_len = load_dataset_from_disk()
     print("Mapping Dataset Processor to Dataset")
-
     
     data_collator = DataCollatorCTCWithPadding(processor=processor, input_key=MODEL_CONFIG['input_key'], padding=True)
     wer_metric = load_metric("wer")
@@ -190,17 +189,17 @@ def main():
     training_args = CustomTrainingArguements(
         output_dir= finetuned_model_path,
         group_by_length=True,
-        per_device_train_batch_size= 1 if not DRY_RUN else 2,
-        per_device_eval_batch_size= 2 if not DRY_RUN else 2,
-        gradient_accumulation_steps= 4 if not DRY_RUN else 4,
+        per_device_train_batch_size= 1 if not DRY_RUN else 1,
+        per_device_eval_batch_size= 2 if not DRY_RUN else 1,
+        gradient_accumulation_steps= 2 if not DRY_RUN else 4,
         evaluation_strategy="epoch",
-        num_train_epochs= 10 if not DRY_RUN else 4,
+        num_train_epochs= 10 if not DRY_RUN else 5,
         gradient_checkpointing=True,
         max_steps = max_steps,
         logging_steps=total_steps_per_epoch if not DRY_RUN else 64,
         learning_rate=5e-5,
         warmup_steps_ratio=0.1,
-        weight_decay=0.0001,
+        weight_decay=0.001,
     ) 
     print("Setting Trainer")
 # Instead of directly passing 'dataset' to DataLoader, pass dataset['train'] or dataset['test']
@@ -359,10 +358,14 @@ def main():
         progress_bar.reset(total=total_steps_per_epoch)  # Reset for the next epoch if you are using a single progress bar for all epochs
 
     # Save the final model
+    print("Waiting for everyone")
     accelerator.wait_for_everyone()
     if accelerator.is_local_main_process:
+        print("Unwrapping model")
         model = accelerator.unwrap_model(model)
+        print("saving final model")
         model.save_pretrained(finetuned_model_path)    
+        print("Saved")
 if __name__=='__main__':
    main()
 
