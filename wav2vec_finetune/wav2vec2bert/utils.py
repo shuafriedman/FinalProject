@@ -38,8 +38,8 @@ class CustomTrainingArguements:
     def __init__(self, output_dir, group_by_length, per_device_train_batch_size, 
                  per_device_eval_batch_size,
                  gradient_accumulation_steps, evaluation_strategy, num_train_epochs, 
-                 gradient_checkpointing, logging_steps, learning_rate, max_steps,
-                    warmup_steps_ratio, weight_decay
+                 gradient_checkpointing, learning_rate, max_steps,
+                    warmup_steps_ratio, weight_decay, logging_steps=None
         ):
         self.output_dir = output_dir
         self.group_by_length = group_by_length

@@ -212,6 +212,8 @@ def main():
     }
     accelerator = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=training_args.gradient_accumulation_steps)
     
+    training_args.train_batch_size = training_args.per_device_train_batch_size * max(1, accelerator.num_processes)  # from huggingface trainer args code
+
     total_steps_per_epoch = train_samples_len // training_args.train_batch_size
     if train_samples_len % training_args.train_batch_size != 0:
         total_steps_per_epoch += 1
