@@ -196,7 +196,6 @@ def main():
         num_train_epochs= 10 if not DRY_RUN else 5,
         gradient_checkpointing=True,
         max_steps = max_steps,
-        logging_steps=total_steps_per_epoch // 2 if not DRY_RUN else 64,
         learning_rate=5e-5,
         warmup_steps_ratio=0.1,
         weight_decay=0.001,
@@ -213,13 +212,15 @@ def main():
     }
     accelerator = Accelerator(mixed_precision="fp16", gradient_accumulation_steps=training_args.gradient_accumulation_steps)
     
-    training_args.train_batch_size = training_args.per_device_train_batch_size * max(1, accelerator.num_processes) #from huggingface trainer args code
     total_steps_per_epoch = train_samples_len // training_args.train_batch_size
     if train_samples_len % training_args.train_batch_size != 0:
         total_steps_per_epoch += 1
-
+    
     total_training_steps = total_steps_per_epoch * training_args.num_train_epochs
-
+    
+    # Update training_args with correct logging_steps
+    training_args.logging_steps = total_steps_per_epoch // 2 if not DRY_RUN else 64
+    
     lr_scheduler = get_linear_schedule_with_warmup(
         optimizer=optimizer,
         num_warmup_steps= total_training_steps * training_args.warmup_steps_ratio,
