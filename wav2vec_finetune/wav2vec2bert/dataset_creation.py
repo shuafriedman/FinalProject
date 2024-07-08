@@ -29,10 +29,12 @@ def prepare_dataset(batch, processor, input_key):
     batch["labels"] = processor(text=batch["transcription"]).input_ids
     return batch
 
-def remove_nan_batches(batch, input_key):
+def remove_bad_batches(batch, input_key):
     if np.isnan(batch[input_key]).any():
         return False
     if np.isnan(batch['labels']).any():
+        return False
+    if len(example['labels']) == 0 or len(example['input_features']) == 0:
         return False
     return True
 
@@ -163,7 +165,7 @@ def main():
         dataset = dataset.map(prepare_dataset, remove_columns=dataset["train"].features.keys(),
                               fn_kwargs={"processor": processor, "input_key": MODEL_CONFIG['input_key']}, batch_size=-1, num_proc=num_cores)
     for name in dataset:
-        dataset[name] = dataset[name].filter(remove_nan_batches, fn_kwargs={"input_key": MODEL_CONFIG['input_key']}, num_proc=num_cores)
+        dataset[name] = dataset[name].filter(remove_bad_batches, fn_kwargs={"input_key": MODEL_CONFIG['input_key']}, num_proc=num_cores)
 
     print("Saving dataset to disk")
     filtered_suffix = "-filtered" if FILTER_LONG_SAMPLES else None
