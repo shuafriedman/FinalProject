@@ -335,10 +335,10 @@ def main():
             # Evaluate at the end of each epoch
 
             if current_global_step % training_args.logging_steps == 0:
-                # if checkpointing_steps != "epoch":
-                if accelerator.is_local_main_process:
-                    eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
-                    logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
+                if checkpointing_steps != "epoch":
+                    if accelerator.is_local_main_process:
+                        eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
+                        logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
         #evaluate if logging steps is None or if we are at the end of the last epoch
         # if training_args.logging_steps == None or (epoch + 1 == training_args.num_train_epochs):    
         if accelerator.is_local_main_process:
