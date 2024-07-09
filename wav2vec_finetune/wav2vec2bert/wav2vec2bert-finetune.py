@@ -189,8 +189,8 @@ def main():
     training_args = CustomTrainingArguements(
         output_dir= finetuned_model_path,
         group_by_length=True,
-        per_device_train_batch_size= 1 if not DRY_RUN else 1,
-        per_device_eval_batch_size= 1 if not DRY_RUN else 1,
+        per_device_train_batch_size= 2 if not DRY_RUN else 1,
+        per_device_eval_batch_size= 8 if not DRY_RUN else 1,
         gradient_accumulation_steps= 2 if not DRY_RUN else 4,
         evaluation_strategy="epoch",
         num_train_epochs= 10 if not DRY_RUN else 5,
@@ -222,7 +222,8 @@ def main():
     
     # Update training_args with correct logging_steps
     training_args.logging_steps = total_steps_per_epoch // 2 if not DRY_RUN else 64
-    
+    # training_args.logging_steps = 60 if not DRY_RUN else 64
+
     lr_scheduler = get_linear_schedule_with_warmup(
         optimizer=optimizer,
         num_warmup_steps= total_training_steps * training_args.warmup_steps_ratio,
@@ -334,10 +335,10 @@ def main():
             # Evaluate at the end of each epoch
 
             if current_global_step % training_args.logging_steps == 0:
-                if checkpointing_steps != "epoch":
-                    if accelerator.is_local_main_process:
-                        eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
-                        logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
+                # if checkpointing_steps != "epoch":
+                if accelerator.is_local_main_process:
+                    eval_loss, wer = evaluate(model, dataloaders['test'], accelerator, processor, wer_metric)
+                    logger.info(f"Global Step: {current_global_step}, Epoch: {epoch}, Training Loss: {loss.item()}, Evaluation Loss: {eval_loss}, WER: {wer}")
         #evaluate if logging steps is None or if we are at the end of the last epoch
         # if training_args.logging_steps == None or (epoch + 1 == training_args.num_train_epochs):    
         if accelerator.is_local_main_process:
